@@ -13,20 +13,30 @@ import config
 import time
 import requests
 import re
+import os
+import argparse
+import json
 
 # Konfigurera loggning
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('azure_cost_processor.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+def setup_logging(verbose=False):
+    # Stäng av HTTP-loggning från Azure SDK om inte verbose-läge är aktiverat
+    if not verbose:
+        logging.getLogger('azure.core.pipeline.policies.http_logging_policy').setLevel(logging.WARNING)
+        logging.getLogger('azure.identity').setLevel(logging.WARNING)
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('azure_cost_processor.log'),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
 
 class AzureCostProcessor:
-    def __init__(self):
+    def __init__(self, logger):
+        self.logger = logger
         self.credentials = ClientSecretCredential(
             tenant_id=config.AZURE_TENANT_ID,
             client_id=config.AZURE_CLIENT_ID,
@@ -35,127 +45,507 @@ class AzureCostProcessor:
         self.cost_client = CostManagementClient(self.credentials)
         self.resource_client = ResourceManagementClient(self.credentials, config.AZURE_TENANT_ID)
 
-    def _get_time_period(self):
+    def _get_time_period(self, billing_period=None):
         """
-        Skapar tidsperiod för rapporten baserat på konfiguration.
+        Skapar tidsperiod för rapporten baserat på konfiguration eller angiven period (YYYYMM).
+        Args:
+            billing_period (str, optional): Period i formatet 'YYYYMM'
+        Returns:
+            GenerateDetailedCostReportTimePeriod
         """
-        end_date = datetime.now()
-        if config.REPORT_TIME_PERIOD == "Last30Days":
-            start_date = end_date - timedelta(days=30)
-        elif config.REPORT_TIME_PERIOD == "Last7Days":
-            start_date = end_date - timedelta(days=7)
-        elif config.REPORT_TIME_PERIOD == "LastMonth":
-            start_date = end_date.replace(day=1) - timedelta(days=1)
-            start_date = start_date.replace(day=1)
+        if billing_period:
+            # Omvandla YYYYMM till start och slut på månaden
+            try:
+                start_date = datetime.strptime(billing_period, "%Y%m")
+                # Sista dagen i månaden: ta första dagen i nästa månad minus en dag
+                if start_date.month == 12:
+                    next_month = start_date.replace(year=start_date.year+1, month=1, day=1)
+                else:
+                    next_month = start_date.replace(month=start_date.month+1, day=1)
+                end_date = next_month - timedelta(days=1)
+            except Exception as e:
+                raise ValueError(f"Felaktigt format på period: {billing_period}. Ange som 'YYYYMM'.")
         else:
-            raise ValueError(f"Okänd tidsperiod: {config.REPORT_TIME_PERIOD}")
+            end_date = datetime.now()
+            if config.REPORT_TIME_PERIOD == "Last30Days":
+                start_date = end_date - timedelta(days=30)
+            elif config.REPORT_TIME_PERIOD == "Last7Days":
+                start_date = end_date - timedelta(days=7)
+            elif config.REPORT_TIME_PERIOD == "LastMonth":
+                start_date = end_date.replace(day=1) - timedelta(days=1)
+                start_date = start_date.replace(day=1)
+            else:
+                raise ValueError(f"Okänd tidsperiod: {config.REPORT_TIME_PERIOD}")
 
         return GenerateDetailedCostReportTimePeriod(
             start=start_date.strftime("%Y-%m-%d"),
             end=end_date.strftime("%Y-%m-%d")
         )
 
-    def generate_detailed_cost_report_billing_account(self, billing_account_id):
+    def generate_detailed_cost_report_billing_account(self, billing_account_id, billing_period=None):
         """
         Genererar en detaljerad kostnadsrapport för ett billing account.
         Args:
             billing_account_id (str): Billing account ID
+            billing_period (str, optional): Period i formatet 'YYYYMM'
         Returns:
             str: URL till den genererade rapporten
         """
         try:
-            logger.info(f"Genererar detaljerad kostnadsrapport för billing account: {billing_account_id}")
+            self.logger.info(f"Genererar detaljerad kostnadsrapport för billing account: {billing_account_id}")
             report_definition = GenerateDetailedCostReportDefinition(
                 metric=GenerateDetailedCostReportMetricType.ACTUAL_COST,
-                time_period=self._get_time_period()
+                time_period=self._get_time_period(billing_period)
             )
             scope = f"/providers/Microsoft.Billing/billingAccounts/{billing_account_id}"
             result = self.cost_client.generate_detailed_cost_report.begin_create_operation(
                 scope=scope,
                 parameters=report_definition
             )
-            logger.info("Väntar på att rapporten ska genereras...")
+            self.logger.info("Väntar på att rapporten ska genereras...")
             report_url = None
             # Extrahera Location-headern från initial response
             location_url = result._polling_method._initial_response.http_response.headers.get("Location")
             if not location_url:
-                logger.error("Kunde inte hitta Location-headern i initialt svar. Kan inte fortsätta.")
+                self.logger.error("Kunde inte hitta Location-headern i initialt svar. Kan inte fortsätta.")
                 return None
-            logger.info(f"Location-header (operationStatus-URL): {location_url}")
+            self.logger.info(f"Location-header (operationStatus-URL): {location_url}")
             match = re.search(r'/operationResults?/([\w-]+)', location_url)
             if match:
                 operation_id = match.group(1)
             else:
-                logger.error("Kunde inte extrahera operationId från Location-headern.")
+                self.logger.error("Kunde inte extrahera operationId från Location-headern.")
                 return None
             operation_result_url = f"https://management.azure.com/providers/Microsoft.Billing/billingAccounts/{billing_account_id}/providers/Microsoft.CostManagement/operationResults/{operation_id}?api-version=2021-10-01"
             # Polling loop
             while True:
                 time.sleep(10)
                 status = result.status()
-                logger.info(f"Rapportstatus: {status}")
+                self.logger.info(f"Rapportstatus: {status}")
                 if status in ["Succeeded", "Completed"]:
                     # Hämta access token
                     credential = DefaultAzureCredential()
                     token = credential.get_token("https://management.azure.com/.default").token
                     headers = {"Authorization": f"Bearer {token}"}
                     response = requests.get(operation_result_url, headers=headers)
-                    logger.info(f"Svar från operationResult-URL: {response.text}")
+                    self.logger.info(f"Svar från operationResult-URL: {response.text}")
                     if response.ok:
                         data = response.json()
                         report_url = data.get("properties", {}).get("downloadUrl")
                         if report_url:
-                            logger.info(f"Download URL till rapporten: {report_url}")
+                            self.logger.info(f"Download URL till rapporten: {report_url}")
                         else:
-                            logger.warning("Ingen downloadUrl hittades i operationResult-svaret.")
+                            self.logger.warning("Ingen downloadUrl hittades i operationResult-svaret.")
                     else:
-                        logger.warning(f"Kunde inte hämta operationResult: {response.status_code} {response.text}")
+                        self.logger.warning(f"Kunde inte hämta operationResult: {response.status_code} {response.text}")
                     break
                 elif status == "Failed":
                     raise Exception("Rapportgenerering misslyckades")
             if not report_url:
-                logger.warning("Kunde inte hitta rapport-URL. Kontrollera loggen för operationResult-svaret.")
+                self.logger.warning("Kunde inte hitta rapport-URL. Kontrollera loggen för operationResult-svaret.")
             else:
-                logger.info(f"Rapport genererad framgångsrikt: {report_url}")
+                self.logger.info(f"Rapport genererad framgångsrikt: {report_url}")
             return report_url
         except Exception as e:
-            logger.error(f"Fel vid generering av detaljerad kostnadsrapport: {str(e)}")
+            self.logger.error(f"Fel vid generering av detaljerad kostnadsrapport: {str(e)}")
             raise
 
-    def process_cost_data(self, report_url):
+    def analyze_cost_columns(self, df):
+        """
+        Analyserar olika kostnadskolumner i rapporten för att identifiera skillnader och mönster.
+        Args:
+            df (pd.DataFrame): DataFrame med kostnadsdata
+        """
+        cost_columns = ['CostInBillingCurrency', 'EffectivePrice', 'UnitPrice', 'PayGPrice']
+        
+        self.logger.info("\nAnalys av kostnadskolumner:")
+        self.logger.info("-" * 50)
+        
+        # Kontrollera vilka kolumner som finns i rapporten
+        available_columns = [col for col in cost_columns if col in df.columns]
+        self.logger.info(f"Tillgängliga kostnadskolumner: {', '.join(available_columns)}")
+        
+        # Grundläggande statistik för varje kolumn
+        for col in available_columns:
+            self.logger.info(f"\nStatistik för {col}:")
+            stats = df[col].describe()
+            self.logger.info(f"Antal värden: {stats['count']}")
+            self.logger.info(f"Medelvärde: {stats['mean']:.2f}")
+            self.logger.info(f"Min: {stats['min']:.2f}")
+            self.logger.info(f"Max: {stats['max']:.2f}")
+            
+            # Räkna antal unika värden
+            unique_count = df[col].nunique()
+            self.logger.info(f"Antal unika värden: {unique_count}")
+            
+            # Visa de vanligaste värdena
+            if unique_count < 10:  # Bara visa om det är få unika värden
+                self.logger.info("\nVanligaste värdena:")
+                value_counts = df[col].value_counts().head(5)
+                for value, count in value_counts.items():
+                    self.logger.info(f"  {value}: {count} gånger")
+        
+        # Jämför CostInBillingCurrency med andra kolumner
+        if 'CostInBillingCurrency' in df.columns:
+            self.logger.info("\nJämförelse med CostInBillingCurrency:")
+            for col in available_columns:
+                if col != 'CostInBillingCurrency':
+                    # Beräkna skillnaden mellan kolumnerna
+                    diff = df[col] - df['CostInBillingCurrency']
+                    self.logger.info(f"\nSkillnad mellan {col} och CostInBillingCurrency:")
+                    self.logger.info(f"  Medelvärde av skillnad: {diff.mean():.2f}")
+                    self.logger.info(f"  Max skillnad: {diff.max():.2f}")
+                    self.logger.info(f"  Min skillnad: {diff.min():.2f}")
+                    
+                    # Räkna hur många rader som skiljer sig
+                    different_rows = (diff != 0).sum()
+                    total_rows = len(df)
+                    self.logger.info(f"  Antal rader som skiljer sig: {different_rows} av {total_rows} ({(different_rows/total_rows*100):.1f}%)")
+
+    def extract_costcenter_tag(self, tags_str):
+        """
+        Extraherar värdet för 'costcenter' ur en Tags-sträng.
+        Args:
+            tags_str (str): Tags-kolumnens innehåll
+        Returns:
+            str: Värdet på costcenter-taggen eller 'Saknar costcenter-tag'
+        """
+        if pd.isna(tags_str):
+            return 'Saknar costcenter-tag'
+        try:
+            # Försök hitta "costcenter": "xxxx"
+            match = re.search(r'"costcenter"\s*:\s*"([^"]+)"', tags_str, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            else:
+                return 'Saknar costcenter-tag'
+        except Exception:
+            return 'Saknar costcenter-tag'
+
+    def extract_billing_tag(self, tags_str):
+        """
+        Extraherar värdet för 'Billing' ur en Tags-sträng.
+        Args:
+            tags_str (str): Tags-kolumnens innehåll
+        Returns:
+            str: Värdet på Billing-taggen eller 'Saknar Billing-tag'
+        """
+        if pd.isna(tags_str):
+            return 'Saknar Billing-tag'
+        try:
+            match = re.search(r'"Billing"\s*:\s*"([^"]+)"', tags_str, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            else:
+                return 'Saknar Billing-tag'
+        except Exception:
+            return 'Saknar Billing-tag'
+
+    def extract_tags(self, row):
+        """
+        Extraherar specifika taggar från Tag-kolumnen och lägger till dem som nya kolumner.
+        Args:
+            row (dict): En rad från kostnadsrapporten
+        Returns:
+            dict: Uppdaterad rad med extraherade taggar
+        """
+        # Standardvärden
+        row['BillingTag'] = ''
+        row['CostCenterTag'] = ''
+        row['BillingRGTag'] = ''
+        row['BillingProjTag'] = ''
+        row['BillingAktTag'] = ''
+        row['BillingKatTag'] = ''
+
+        # Hämta Tags och kontrollera att det är en giltig sträng
+        tags = row.get('Tags', '')
+        if pd.isna(tags) or not isinstance(tags, str):
+            return row
+
+        # Försök tolka som JSON
+        try:
+            tag_dict = json.loads(tags.replace("'", '"'))
+            # Hantera olika möjliga nycklar (case-insensitive)
+            for k, v in tag_dict.items():
+                key = k.lower()
+                if key == 'billing':
+                    row['BillingTag'] = str(v)
+                elif key == 'costcenter':
+                    row['CostCenterTag'] = str(v)
+                elif key == 'billing-rg':
+                    row['BillingRGTag'] = str(v)
+                elif key == 'billing-proj':
+                    row['BillingProjTag'] = str(v)
+                elif key == 'billing-akt':
+                    row['BillingAktTag'] = str(v)
+                elif key == 'billing-kat':
+                    row['BillingKatTag'] = str(v)
+        except Exception:
+            # Fallback: regex för "key": "value"
+            def extract_regex(tag, s):
+                try:
+                    match = re.search(rf'"{tag}"\s*:\s*"([^"]+)"', s, re.IGNORECASE)
+                    return match.group(1) if match else ''
+                except Exception:
+                    return ''
+            
+            row['BillingTag'] = extract_regex('Billing', tags)
+            row['CostCenterTag'] = extract_regex('costcenter', tags)
+            row['BillingRGTag'] = extract_regex('Billing-RG', tags)
+            row['BillingProjTag'] = extract_regex('Billing-proj', tags)
+            row['BillingAktTag'] = extract_regex('Billing-akt', tags)
+            row['BillingKatTag'] = extract_regex('Billing-kat', tags)
+        
+        return row
+
+    def export_to_excel(self, df, filename=None):
+        """
+        Exporterar data till en Excel-fil med tre flikar:
+        - Kontering (med periodinfo överst)
+        - Pivot (instruktion för pivottabell)
+        - Data (hela DataFrame som Excel-tabell med filter och valutaformat)
+        """
+        import pandas as pd
+        from datetime import datetime
+
+        # Hämta period från BillingPeriodStartDate och BillingPeriodEndDate
+        if 'BillingPeriodStartDate' in df.columns and 'BillingPeriodEndDate' in df.columns:
+            start = pd.to_datetime(df['BillingPeriodStartDate'].min()).strftime('%Y-%m-%d')
+            end = pd.to_datetime(df['BillingPeriodEndDate'].max()).strftime('%Y-%m-%d')
+            period_str = f"Denna rapport gäller perioden: {start} till {end}"
+            # För filnamn: YYYY-MM
+            period_suffix = pd.to_datetime(df['BillingPeriodStartDate'].min()).strftime('%Y-%m')
+        else:
+            period_str = "Period okänd (BillingPeriodStartDate/BillingPeriodEndDate saknas)"
+            period_suffix = datetime.now().strftime('%Y-%m')
+
+        # Sätt filnamn om det inte är angivet
+        if not filename:
+            filename = f"reports/azure_cost_report_export_{period_suffix}.xlsx"
+
+        with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:
+            # Flik 1: Kontering (med periodinfo överst)
+            workbook  = writer.book
+            worksheet_konter = workbook.add_worksheet('Kontering')
+            writer.sheets['Kontering'] = worksheet_konter
+            worksheet_konter.write(0, 0, period_str)
+
+            # Flik 2: Pivot (instruktion)
+            worksheet_pivot = workbook.add_worksheet('Pivot')
+            writer.sheets['Pivot'] = worksheet_pivot
+            
+            # Skapa format för instruktionstexten
+            wrap_format = workbook.add_format({
+                'text_wrap': True,
+                'valign': 'top',
+                'align': 'left'
+            })
+            
+            instruktion = (
+                "Skapa en pivottabell så här:\n"
+                "1. Markera cellen B4 i fliken Pivot\n"
+                "2. Välj Infoga > Pivottabell > Från tabell/intervall.\n"
+                "3. Skriv Data i fältet för Tabell/område.\n"
+                "4. Låt värdet Pivot!$B$4 stå kvar i fältet för Plats.\n"
+                "5. Dra t.ex. CostCenterTag till Rader och CostInBillingCurrency till Värden.\n"
+                "Du kan sedan utforska datat fritt!"
+            )
+            worksheet_pivot.write(0, 0, instruktion, wrap_format)
+            worksheet_pivot.set_column(0, 0, 60)  # Sätt kolumnbredd till 60 tecken
+            worksheet_pivot.set_row(0, 120)  # Sätt radhöjd till 120 pixlar
+
+            # Flik 3: Data (hela DataFrame som tabell)
+            df.to_excel(writer, sheet_name='Data', index=False, header=True, startrow=0)
+            worksheet_data = writer.sheets['Data']
+            (max_row, max_col) = df.shape
+
+            def excel_col(n):
+                s = ''
+                while n >= 0:
+                    s = chr(n % 26 + ord('A')) + s
+                    n = n // 26 - 1
+                return s
+
+            last_col = excel_col(max_col - 1)
+            table_range = f"A1:{last_col}{max_row+1}"
+
+            currency_format = workbook.add_format({'num_format': '#,##0.00 "kr"'})
+            if 'CostInBillingCurrency' in df.columns:
+                col_idx = df.columns.get_loc('CostInBillingCurrency')
+                col_letter = excel_col(col_idx)
+                worksheet_data.set_column(f'{col_letter}:{col_letter}', None, currency_format)
+
+            worksheet_data.add_table(table_range, {
+                'name': 'Data',
+                'columns': [{'header': col} for col in df.columns],
+                'autofilter': True
+            })
+
+        self.logger.info(f"Excel-fil skapad: {filename}")
+
+    def process_cost_data(self, report_url=None, local_file_path=None):
         """
         Bearbetar kostnadsdata från den detaljerade rapporten.
-        
         Args:
-            report_url (str): URL till den genererade rapporten
-        
+            report_url (str, optional): URL till den genererade rapporten
+            local_file_path (str, optional): Sökväg till en befintlig rapportfil
         Returns:
             pd.DataFrame: Bearbetad data i konteringsformat
         """
         try:
-            logger.info("Bearbetar kostnadsdata från detaljerad rapport")
+            self.logger.info("Bearbetar kostnadsdata från detaljerad rapport")
             
-            # Här kommer vi att implementera nedladdning och bearbetning av rapporten
-            # Detta är en platshållare för nu
+            if report_url:
+                # Skapa reports-mappen om den inte finns
+                reports_dir = "reports"
+                os.makedirs(reports_dir, exist_ok=True)
+                
+                # Generera filnamn baserat på datum
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                local_filename = os.path.join(reports_dir, f"azure_cost_report_{timestamp}.csv.gz")
+                
+                # Ladda ner filen
+                self.logger.info(f"Laddar ner rapport till {local_filename}")
+                with requests.get(report_url, stream=True) as r:
+                    r.raise_for_status()
+                    with open(local_filename, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                self.logger.info(f"Rapport nedladdad framgångsrikt till {local_filename}")
+                
+                file_to_process = local_filename
+            elif local_file_path:
+                file_to_process = local_file_path
+            else:
+                raise ValueError("Antingen report_url eller local_file_path måste anges")
+
+            # Kontrollera om filen är gzip-komprimerad genom att läsa de första bytena
+            with open(file_to_process, 'rb') as f:
+                magic = f.read(2)
             
-            return None
+            # Läs in CSV-filen med rätt inställningar
+            self.logger.info(f"Läser in CSV-data från {file_to_process}")
+            if magic == b'\x1f\x8b':  # gzip magic number
+                self.logger.info("Filen är gzip-komprimerad")
+                df = pd.read_csv(file_to_process, compression='gzip')
+            else:
+                self.logger.info("Filen är en vanlig CSV-fil")
+                # Öppna filen explicit i textläge med UTF-8 encoding
+                with open(file_to_process, 'r', encoding='utf-8-sig') as f:
+                    df = pd.read_csv(f)
+            
+            self.logger.info(f"CSV-data inläst framgångsrikt. Antal rader: {len(df)}")
+            
+            # Skriv ut kolumnnamnen för att se vad vi har att arbeta med
+            # logger.info("Tillgängliga kolumner i rapporten:")
+            # for col in df.columns:
+            #     logger.info(f"- {col}")
+
+            # Summera hela kolumnen CostInBillingCurrency
+            if 'CostInBillingCurrency' in df.columns:
+                total_cost = df['CostInBillingCurrency'].sum()
+                self.logger.info(f"\nTOTALSUMMA för CostInBillingCurrency: {total_cost:,.2f}\n")
+            else:
+                self.logger.warning("Kolumnen 'CostInBillingCurrency' saknas i rapporten!")
+
+            # Subtotaler per ResourceGroup, MeterCategory och SubscriptionName
+            for group_col in ['ResourceGroup', 'MeterCategory', 'SubscriptionName']:
+                if group_col in df.columns:
+                    self.logger.info(f"\nSUBTOTALER per {group_col}:")
+                    subtotals = df.groupby(group_col)['CostInBillingCurrency'].sum().sort_values(ascending=False)
+                    for name, subtotal in subtotals.items():
+                        self.logger.info(f"  {name}: {subtotal:,.2f}")
+                else:
+                    self.logger.warning(f"Kolumnen '{group_col}' saknas i rapporten!")
+
+            # Extrahera costcenter-taggen ur Tags-kolumnen
+            if 'Tags' in df.columns:
+                self.logger.info("\nExtraherar taggar ur Tags-kolumnen...")
+                # Använd apply med extract_tags för att extrahera alla taggar
+                df = df.apply(self.extract_tags, axis=1)
+                
+                # Visa subtotaler för de extraherade taggarna
+                for tag_col in ['CostCenterTag', 'BillingTag', 'BillingRGTag', 'BillingProjTag', 'BillingAktTag', 'BillingKatTag']:
+                    if tag_col in df.columns:
+                        self.logger.info(f"\nSUBTOTALER per {tag_col}:")
+                        tag_subtotals = df.groupby(tag_col)['CostInBillingCurrency'].sum().sort_values(ascending=False)
+                        for tag, subtotal in tag_subtotals.items():
+                            self.logger.info(f"  {tag}: {subtotal:,.2f}")
+            else:
+                self.logger.warning("Kolumnen 'Tags' saknas i rapporten!")
+
+            # Analysera kostnadskolumner
+            # self.analyze_cost_columns(df)
+
+            # Efter bearbetning: exportera till Excel
+            self.export_to_excel(df)
+
+            # Här kommer vi senare att lägga till kod för att bearbeta datan
+            # För nu returnerar vi bara DataFrame
+            return df
+        
         except Exception as e:
-            logger.error(f"Fel vid bearbetning av kostnadsdata: {str(e)}")
+            self.logger.error(f"Fel vid bearbetning av kostnadsdata: {str(e)}")
             raise
 
 def main():
     try:
-        processor = AzureCostProcessor()
+        # Lägg till argumenthantering
+        parser = argparse.ArgumentParser(description='Azure Cost Processor')
+        parser.add_argument('-v', '--verbose', action='store_true', help='Aktivera detaljerad loggning')
+        args = parser.parse_args()
+        
+        # Konfigurera loggning baserat på verbose-flaggan
+        logger = setup_logging(args.verbose)
+        
+        processor = AzureCostProcessor(logger)
         logger.info("Azure Cost Processor startad")
         
-        if not config.AZURE_BILLING_ACCOUNT_ID:
-            raise ValueError("AZURE_BILLING_ACCOUNT_ID måste anges i .env-filen")
-            
-        report_url = processor.generate_detailed_cost_report_billing_account(config.AZURE_BILLING_ACCOUNT_ID)
+        # Fråga användaren om de vill generera en ny rapport eller bearbeta en befintlig
+        print("\nVälj alternativ:")
+        print("1. Generera ny kostnadsrapport från Azure")
+        print("2. Bearbeta befintlig rapportfil")
+        choice = input("Ange ditt val (1 eller 2): ").strip()
         
-        if report_url:
-            processed_data = processor.process_cost_data(report_url)
-            logger.info("Kostnadsdata bearbetad framgångsrikt")
+        if choice == "1":
+            # Fråga om användaren vill ange en period
+            period = input("Ange rapportperiod (YYYYMM) eller lämna tomt för standard: ").strip()
+            if not config.AZURE_BILLING_ACCOUNT_ID:
+                raise ValueError("AZURE_BILLING_ACCOUNT_ID måste anges i .env-filen")
+            report_url = processor.generate_detailed_cost_report_billing_account(config.AZURE_BILLING_ACCOUNT_ID, period if period else None)
+            if report_url:
+                processed_data = processor.process_cost_data(report_url)
+                logger.info("Kostnadsdata bearbetad framgångsrikt")
+        
+        elif choice == "2":
+            # Bearbeta befintlig fil
+            print("\nTillgängliga rapporter i 'reports'-mappen:")
+            reports_dir = "reports"
+            if os.path.exists(reports_dir):
+                files = [f for f in os.listdir(reports_dir) if f.endswith('.csv.gz')]
+                if not files:
+                    print("Inga rapporter hittades i 'reports'-mappen.")
+                    return
+                
+                for i, file in enumerate(files, 1):
+                    print(f"{i}. {file}")
+                
+                file_choice = input("\nVälj rapport att bearbeta (ange nummer): ").strip()
+                try:
+                    selected_file = files[int(file_choice) - 1]
+                    file_path = os.path.join(reports_dir, selected_file)
+                    logger.info(f"Bearbetar befintlig rapport: {selected_file}")
+                    processed_data = processor.process_cost_data(None, file_path)
+                    logger.info("Kostnadsdata bearbetad framgångsrikt")
+                except (ValueError, IndexError):
+                    print("Ogiltigt val. Avslutar.")
+                    return
+            else:
+                print("'reports'-mappen hittades inte.")
+                return
+        else:
+            print("Ogiltigt val. Avslutar.")
+            return
         
     except Exception as e:
         logger.error(f"Ett fel uppstod: {str(e)}")

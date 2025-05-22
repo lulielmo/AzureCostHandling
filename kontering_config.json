@@ -1,0 +1,43 @@
+{
+  "uppsamlingskontering": {
+    "konproj": "P.201726",
+    "rg": "",
+    "akt": "999",
+    "projkat": "5420"
+  },
+  "devops": {
+    "default": {
+      "konproj": "9999",
+      "rg": "",
+      "akt": "",
+      "projkat": ""
+    },
+    "mappings": [
+      {
+        "subcat": "Azure Pipelines",
+        "metername": "Microsoft-hosted CI/CD Concurrent Job",
+        "konproj": "9998",
+        "rg": "",
+        "akt": "123",
+        "projkat": ""
+      },
+      {
+        "subcat": "Azure Repos and Boards (Basic)",
+        "metername": "Basic User",
+        "konproj": "9997",
+        "rg": "",
+        "akt": "456",
+        "projkat": ""
+      },
+      {
+        "subcat": "Azure Test Plans",
+        "metername": "Standard User",
+        "konproj": "9996",
+        "rg": "",
+        "akt": "789",
+        "projkat": ""
+      }
+    ]
+  },
+  "godkant_av": "John Munthe"
+} 

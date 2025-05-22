@@ -298,10 +298,165 @@ class AzureCostProcessor:
         
         return row
 
+    def load_kontering_config(self, path="kontering_config.json"):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.warning(f"Kunde inte läsa konteringskonfiguration: {e}. Använder standardvärden.")
+            # Fallback till hårdkodade värden om filen saknas
+            return {
+                "uppsamlingskontering": {
+                    "konproj": "P.201726",
+                    "rg": "",
+                    "akt": "999",
+                    "projkat": "5420"
+                },
+                "devops": {
+                    "konproj": "9999",
+                    "rg": "",
+                    "akt": "",
+                    "projkat": ""
+                },
+                "godkant_av": "John Munthe"
+            }
+
+    def generate_konteringsrader(self, df, config):
+        """
+        Skapar en DataFrame med konteringsrader enligt reglerna i konteringsregler.md.
+        Grupperar och summerar per relevant kombination.
+        Args:
+            df (pd.DataFrame): Kostnadsdata med extraherade taggar
+            config (dict): Inställningar för dummyvärden och 'Godkänt av'
+        Returns:
+            pd.DataFrame: Konteringsrader för export till Excel
+        """
+        rows = []
+        warnings = []
+
+        for _, row in df.iterrows():
+            # Specialfall: Azure DevOps
+            if row.get('MeterCategory') == "Azure DevOps":
+                devops = config.get("devops", {})
+                mapping = devops.get("default", {})
+                # Försök hitta en matchning i mappings
+                mappings = devops.get("mappings", [])
+                subcat = row.get("MeterSubCategory", "")
+                metername = row.get("MeterName", "")
+                for m in mappings:
+                    if m.get("subcat", "") == subcat and m.get("metername", "") == metername:
+                        mapping = m
+                        break
+                kontering = {
+                    "Kon/Proj": mapping.get("konproj", "9999"),
+                    "_empty1": mapping.get("_empty1", ""),
+                    "RG": mapping.get("rg", ""),
+                    "Aktivitet": mapping.get("akt", ""),
+                    "ProjKat": mapping.get("projkat", ""),
+                    "_empty2": mapping.get("_empty2", ""),
+                    "Netto": row.get("CostInBillingCurrency", 0),
+                    "Godkänt av": config.get("godkant_av", "John Munthe")
+                }
+                rows.append(kontering)
+                continue
+
+            # Uppsamlingskontering om ingen Billing-RG eller Billing-proj
+            if not row.get("BillingRGTag") and not row.get("BillingProjTag"):
+                upps = config.get("uppsamlingskontering", {})
+                kontering = {
+                    "Kon/Proj": upps.get("konproj", "P.201726"),
+                    "_empty1": upps.get("_empty1", ""),
+                    "RG": upps.get("rg", ""),
+                    "Aktivitet": upps.get("akt", "999"),
+                    "ProjKat": upps.get("projkat", "5420"),
+                    "_empty2": upps.get("_empty2", ""),
+                    "Netto": row.get("CostInBillingCurrency", 0),
+                    "Godkänt av": config.get("godkant_av", "John Munthe")
+                }
+                rows.append(kontering)
+                continue
+
+            # Om båda är satta: varning, men behandla som Billing-proj
+            if row.get("BillingRGTag") and row.get("BillingProjTag"):
+                warnings.append(f"Varning: Både Billing-RG och Billing-proj är satta på rad med ResourceId {row.get('ResourceId')}. Behandlas som Billing-proj.")
+
+            # Billing-proj
+            if row.get("BillingProjTag"):
+                kontering = {
+                    "Kon/Proj": f"P.{row.get('BillingProjTag')}",
+                    "_empty1": "",
+                    "RG": "",
+                    "Aktivitet": row.get("BillingAktTag", ""),
+                    "ProjKat": row.get("BillingKatTag", ""),
+                    "_empty2": "",
+                    "Netto": row.get("CostInBillingCurrency", 0),
+                    "Godkänt av": config.get("godkant_av", "John Munthe")
+                }
+                rows.append(kontering)
+                continue
+
+            # Billing-RG
+            if row.get("BillingRGTag"):
+                kontering = {
+                    "Kon/Proj": row.get("BillingKatTag", ""),
+                    "_empty1": "",
+                    "RG": row.get("BillingRGTag", ""),
+                    "Aktivitet": row.get("BillingAktTag", ""),
+                    "ProjKat": "",
+                    "_empty2": "",
+                    "Netto": row.get("CostInBillingCurrency", 0),
+                    "Godkänt av": config.get("godkant_av", "John Munthe")
+                }
+                rows.append(kontering)
+                continue
+
+        # Definiera kolumnordning med unika tomma kolumner
+        kolumner = [
+            "Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjKat", "_empty2", "Netto", "Godkänt av"
+        ]
+
+        # Skapa DataFrame
+        kontering_df = pd.DataFrame(rows, columns=kolumner)
+
+        # Gruppera och summera per relevant kombination
+        def group_key(row):
+            # Projektkontering: gruppera på Kon/Proj, Aktivitet, ProjKat
+            if row["Kon/Proj"].startswith("P."):
+                return (row["Kon/Proj"], row["Aktivitet"], row["ProjKat"], row["Godkänt av"])
+            # RG-kontering: gruppera på RG, Aktivitet, Kon/Proj
+            else:
+                return (row["RG"], row["Aktivitet"], row["Kon/Proj"], row["Godkänt av"])
+
+        # Skapa en ny kolumn för grupperingstyp
+        kontering_df["_group"] = kontering_df.apply(group_key, axis=1)
+        grouped = kontering_df.groupby("_group", dropna=False).agg({
+            "Kon/Proj": "first",
+            "_empty1": "first",
+            "RG": "first",
+            "Aktivitet": "first",
+            "ProjKat": "first",
+            "_empty2": "first",
+            "Netto": "sum",
+            "Godkänt av": "first"
+        }).reset_index(drop=True)
+        kontering_df = grouped
+
+        # Filtrera bort rader där Netto = 0
+        kontering_df = kontering_df[kontering_df["Netto"] != 0]
+
+        # Summeringsrad
+        total = kontering_df["Netto"].sum()
+        sumrad = {col: "" for col in kontering_df.columns}
+        sumrad["Netto"] = total
+        sumrad["Kon/Proj"] = "SUMMA"
+        kontering_df = pd.concat([kontering_df, pd.DataFrame([sumrad])], ignore_index=True)
+
+        return kontering_df, warnings
+
     def export_to_excel(self, df, filename=None):
         """
         Exporterar data till en Excel-fil med tre flikar:
-        - Kontering (med periodinfo överst)
+        - Kontering (med periodinfo överst och konteringstabell)
         - Pivot (instruktion för pivottabell)
         - Data (hela DataFrame som Excel-tabell med filter och valutaformat)
         """
@@ -323,24 +478,39 @@ class AzureCostProcessor:
         if not filename:
             filename = f"reports/azure_cost_report_export_{period_suffix}.xlsx"
 
+        # Läs in konteringskonfiguration från fil
+        kontering_config = self.load_kontering_config()
+
+        # Skapa konteringstabell
+        kontering_df, warnings = self.generate_konteringsrader(df, kontering_config)
+        if warnings:
+            for w in warnings:
+                self.logger.warning(w)
+
         with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:
-            # Flik 1: Kontering (med periodinfo överst)
+            # Flik 1: Kontering (med periodinfo överst och konteringstabell)
             workbook  = writer.book
             worksheet_konter = workbook.add_worksheet('Kontering')
             writer.sheets['Kontering'] = worksheet_konter
             worksheet_konter.write(0, 0, period_str)
+            # Skriv ut konteringstabellen med start på rad 2 (index=1)
+            # Skriv rubriker, men tomma för _empty1 och _empty2
+            headers = ["Kon/Proj", "", "RG", "Aktivitet", "ProjKat", "", "Netto", "Godkänt av"]
+            for col_idx, col in enumerate(headers):
+                worksheet_konter.write(1, col_idx, col)
+            for row_idx, row in enumerate(kontering_df.itertuples(index=False), start=2):
+                for col_idx, value in enumerate(row):
+                    worksheet_konter.write(row_idx, col_idx, value)
 
             # Flik 2: Pivot (instruktion)
             worksheet_pivot = workbook.add_worksheet('Pivot')
             writer.sheets['Pivot'] = worksheet_pivot
-            
             # Skapa format för instruktionstexten
             wrap_format = workbook.add_format({
                 'text_wrap': True,
                 'valign': 'top',
                 'align': 'left'
             })
-            
             instruktion = (
                 "Skapa en pivottabell så här:\n"
                 "1. Markera cellen B4 i fliken Pivot\n"
@@ -510,6 +680,19 @@ def main():
         if choice == "1":
             # Fråga om användaren vill ange en period
             period = input("Ange rapportperiod (YYYYMM) eller lämna tomt för standard: ").strip()
+            if period:
+                try:
+                    period_date = datetime.strptime(period, "%Y%m")
+                    today = datetime.today()
+                    # Om perioden är mer än 11 månader bakåt i tiden
+                    if (today.year - period_date.year) * 12 + (today.month - period_date.month) > 11:
+                        confirm = input(f"Du har valt perioden {period_date.strftime('%Y-%m')}, vilket är mer än 11 månader bakåt i tiden. Är du säker på att du vill fortsätta? (j/n): ").strip().lower()
+                        if confirm != 'j':
+                            print("Avbryter på begäran av användaren.")
+                            return
+                except Exception:
+                    print("Felaktigt format på period. Ange som 'YYYYMM'.")
+                    return
             if not config.AZURE_BILLING_ACCOUNT_ID:
                 raise ValueError("AZURE_BILLING_ACCOUNT_ID måste anges i .env-filen")
             report_url = processor.generate_detailed_cost_report_billing_account(config.AZURE_BILLING_ACCOUNT_ID, period if period else None)

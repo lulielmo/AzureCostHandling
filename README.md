@@ -9,6 +9,13 @@ Ett Python-verktyg för att automatisera hantering av Azure-kostnadsrapporter oc
 - Automatisk nedladdning av rapporter
 - Konvertering till konteringsformat i Excel
 
+## Dokumentation
+
+Detta repository innehåller två huvudsakliga dokument:
+
+- **README.md** (denna fil): Innehåller instruktioner för installation, konfiguration och grundläggande användning av verktyget.
+- **[konteringsregler.md](konteringsregler.md)**: Innehåller detaljerade regler och instruktioner för hur kostnader ska konteras, inklusive taggningskonventioner i Azure.
+
 ## Installation
 
 1. Klona detta repository

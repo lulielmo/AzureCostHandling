@@ -5,6 +5,31 @@
 - Vi laddar ner detaljerad kostnadsrapport från Azure och skapar konteringsrader för Medius.
 - Taggningen i Azure är under uppbyggnad och kan saknas eller vara ofullständig.
 
+## Taggning i Azure
+
+### Viktigt att veta
+- Taggar ärvs **inte** mellan nivåer i Azure (t.ex. från resursgrupp till resurser)
+- För att få korrekta konteringsrader måste taggarna sättas på **resursnivå**
+- Om en resursgrupp har taggar men resurserna i gruppen inte har det, kommer kostnaderna för resurserna inte att inkluderas i konteringsrapporten
+
+### Hur man taggar
+1. **För resursgrupper:**
+   - Sätt taggarna direkt på resursgruppen för att dokumentera avsikten
+   - Men kom ihåg att detta inte påverkar konteringsrapporten
+
+2. **För resurser:**
+   - Sätt följande taggar på **varje resurs** som ska konteras:
+     - `Billing-RG` (om resursen ska konteras på resursgruppsnivå)
+     - `Billing-proj` (om resursen ska konteras på projektnivå)
+     - `Billing-kat` (för konteringskategori)
+     - `Billing-akt` (för aktivitetskod)
+   - Detta kan göras manuellt i Azure Portal eller via Azure CLI/PowerShell
+
+3. **Bästa praxis:**
+   - Använd Azure Policy för att automatiskt tillämpa taggar på nya resurser
+   - Skapa en rutin för att regelbundet kontrollera att alla resurser har rätt taggar
+   - Dokumentera taggningskonventioner i teamets wiki eller liknande
+
 ## Taggar och konteringslogik
 
 ### Taggar som används:

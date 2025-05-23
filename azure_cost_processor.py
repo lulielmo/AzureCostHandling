@@ -256,6 +256,7 @@ class AzureCostProcessor:
         row['BillingProjTag'] = ''
         row['BillingAktTag'] = ''
         row['BillingKatTag'] = ''
+        row['BillingDescriptionTag'] = ''
 
         # Hämta Tags och kontrollera att det är en giltig sträng
         tags = row.get('Tags', '')
@@ -280,6 +281,8 @@ class AzureCostProcessor:
                     row['BillingAktTag'] = str(v)
                 elif key == 'billing-kat':
                     row['BillingKatTag'] = str(v)
+                elif key == 'billing-description':
+                    row['BillingDescriptionTag'] = str(v)
         except Exception:
             # Fallback: regex för "key": "value"
             def extract_regex(tag, s):
@@ -288,14 +291,13 @@ class AzureCostProcessor:
                     return match.group(1) if match else ''
                 except Exception:
                     return ''
-            
             row['BillingTag'] = extract_regex('Billing', tags)
             row['CostCenterTag'] = extract_regex('costcenter', tags)
             row['BillingRGTag'] = extract_regex('Billing-RG', tags)
             row['BillingProjTag'] = extract_regex('Billing-proj', tags)
             row['BillingAktTag'] = extract_regex('Billing-akt', tags)
             row['BillingKatTag'] = extract_regex('Billing-kat', tags)
-        
+            row['BillingDescriptionTag'] = extract_regex('Billing-description', tags)
         return row
 
     def load_kontering_config(self, path="kontering_config.json"):
@@ -335,6 +337,7 @@ class AzureCostProcessor:
         warnings = []
 
         for _, row in df.iterrows():
+            kommentar_beskrivning = ""
             # Specialfall: Azure DevOps
             if row.get('MeterCategory') == "Azure DevOps":
                 devops = config.get("devops", {})
@@ -344,9 +347,10 @@ class AzureCostProcessor:
                 subcat = row.get("MeterSubCategory", "")
                 metername = row.get("MeterName", "")
                 for m in mappings:
-                    if m.get("subcat", "") == subcat and m.get("metername", "") == metername:
+                    if m.get("subcat", "").strip().lower() == subcat.strip().lower() and m.get("metername", "").strip().lower() == metername.strip().lower():
                         mapping = m
                         break
+                kommentar_beskrivning = mapping.get("beskrivning") or f"Avser Azure DevOps: {subcat} ({metername})"
                 kontering = {
                     "Kon/Proj": mapping.get("konproj", "9999"),
                     "_empty1": mapping.get("_empty1", ""),
@@ -355,7 +359,8 @@ class AzureCostProcessor:
                     "ProjKat": mapping.get("projkat", ""),
                     "_empty2": mapping.get("_empty2", ""),
                     "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe")
+                    "Godkänt av": config.get("godkant_av", "John Munthe"),
+                    "KommentarBeskrivning": kommentar_beskrivning
                 }
                 rows.append(kontering)
                 continue
@@ -363,6 +368,7 @@ class AzureCostProcessor:
             # Uppsamlingskontering om ingen Billing-RG eller Billing-proj
             if not row.get("BillingRGTag") and not row.get("BillingProjTag"):
                 upps = config.get("uppsamlingskontering", {})
+                kommentar_beskrivning = upps.get("beskrivning") or row.get("BillingDescriptionTag", "") or "Ingen beskrivning angiven"
                 kontering = {
                     "Kon/Proj": upps.get("konproj", "P.201726"),
                     "_empty1": upps.get("_empty1", ""),
@@ -371,7 +377,8 @@ class AzureCostProcessor:
                     "ProjKat": upps.get("projkat", "5420"),
                     "_empty2": upps.get("_empty2", ""),
                     "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe")
+                    "Godkänt av": config.get("godkant_av", "John Munthe"),
+                    "KommentarBeskrivning": kommentar_beskrivning
                 }
                 rows.append(kontering)
                 continue
@@ -382,6 +389,7 @@ class AzureCostProcessor:
 
             # Billing-proj
             if row.get("BillingProjTag"):
+                kommentar_beskrivning = row.get("BillingDescriptionTag", "") or "Ingen beskrivning angiven"
                 kontering = {
                     "Kon/Proj": f"P.{row.get('BillingProjTag')}",
                     "_empty1": "",
@@ -390,13 +398,15 @@ class AzureCostProcessor:
                     "ProjKat": row.get("BillingKatTag", ""),
                     "_empty2": "",
                     "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe")
+                    "Godkänt av": config.get("godkant_av", "John Munthe"),
+                    "KommentarBeskrivning": kommentar_beskrivning
                 }
                 rows.append(kontering)
                 continue
 
             # Billing-RG
             if row.get("BillingRGTag"):
+                kommentar_beskrivning = row.get("BillingDescriptionTag", "") or "Ingen beskrivning angiven"
                 kontering = {
                     "Kon/Proj": row.get("BillingKatTag", ""),
                     "_empty1": "",
@@ -405,14 +415,15 @@ class AzureCostProcessor:
                     "ProjKat": "",
                     "_empty2": "",
                     "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe")
+                    "Godkänt av": config.get("godkant_av", "John Munthe"),
+                    "KommentarBeskrivning": kommentar_beskrivning
                 }
                 rows.append(kontering)
                 continue
 
         # Definiera kolumnordning med unika tomma kolumner
         kolumner = [
-            "Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjKat", "_empty2", "Netto", "Godkänt av"
+            "Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjKat", "_empty2", "Netto", "Godkänt av", "KommentarBeskrivning"
         ]
 
         # Skapa DataFrame
@@ -427,7 +438,6 @@ class AzureCostProcessor:
             else:
                 return (row["RG"], row["Aktivitet"], row["Kon/Proj"], row["Godkänt av"])
 
-        # Skapa en ny kolumn för grupperingstyp
         kontering_df["_group"] = kontering_df.apply(group_key, axis=1)
         grouped = kontering_df.groupby("_group", dropna=False).agg({
             "Kon/Proj": "first",
@@ -437,7 +447,8 @@ class AzureCostProcessor:
             "ProjKat": "first",
             "_empty2": "first",
             "Netto": "sum",
-            "Godkänt av": "first"
+            "Godkänt av": "first",
+            "KommentarBeskrivning": lambda x: x.iloc[0] if (x.nunique() == 1) else "Ingen beskrivning angiven"
         }).reset_index(drop=True)
         kontering_df = grouped
 
@@ -494,11 +505,13 @@ class AzureCostProcessor:
             writer.sheets['Kontering'] = worksheet_konter
             worksheet_konter.write(0, 0, period_str)
             # Skriv ut konteringstabellen med start på rad 2 (index=1)
-            # Skriv rubriker, men tomma för _empty1 och _empty2
+            # Skriv rubriker, men tomma för _empty1 och _empty2, och exkludera KommentarBeskrivning
             headers = ["Kon/Proj", "", "RG", "Aktivitet", "ProjKat", "", "Netto", "Godkänt av"]
             for col_idx, col in enumerate(headers):
                 worksheet_konter.write(1, col_idx, col)
-            for row_idx, row in enumerate(kontering_df.itertuples(index=False), start=2):
+            # Skriv endast ut dessa kolumner från kontering_df
+            export_cols = ["Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjKat", "_empty2", "Netto", "Godkänt av"]
+            for row_idx, row in enumerate(kontering_df[export_cols].itertuples(index=False), start=2):
                 for col_idx, value in enumerate(row):
                     worksheet_konter.write(row_idx, col_idx, value)
 
@@ -552,6 +565,17 @@ class AzureCostProcessor:
             })
 
         self.logger.info(f"Excel-fil skapad: {filename}")
+
+        # Efter att kontering_df och warnings skapats i export_to_excel:
+        # ...
+        # Generera kommentarer för inklistring i Medius
+        print("\nKommentarer för inklistring i Medius:")
+        # Hämta periodinfo
+        period = period_str.replace("Denna rapport gäller perioden: ", "")
+        # Skriv ut kommentarerna numrerat direkt från kontering_df (utom summeringsraden)
+        for idx, row in enumerate(kontering_df.iloc[:-1].itertuples(index=False), 1):
+            kommentar = getattr(row, "KommentarBeskrivning", "")
+            print(f"{idx}. {kommentar}, period: {period}")
 
     def process_cost_data(self, report_url=None, local_file_path=None):
         """

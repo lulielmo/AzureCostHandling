@@ -3,14 +3,16 @@
     "konproj": "P.201726",
     "rg": "",
     "akt": "999",
-    "projkat": "5420"
+    "projkat": "5420",
+    "beskrivning": "Uppsamlingskontering för ej taggade kostnader"
   },
   "devops": {
     "default": {
       "konproj": "9999",
       "rg": "",
       "akt": "",
-      "projkat": ""
+      "projkat": "",
+      "beskrivning": "Övriga DevOps-kostnader"
     },
     "mappings": [
       {
@@ -19,7 +21,8 @@
         "konproj": "9998",
         "rg": "",
         "akt": "123",
-        "projkat": ""
+        "projkat": "",
+        "beskrivning": "Bygg- och deploy-pipelines (CI/CD)"
       },
       {
         "subcat": "Azure Repos and Boards (Basic)",
@@ -27,7 +30,8 @@
         "konproj": "9997",
         "rg": "",
         "akt": "456",
-        "projkat": ""
+        "projkat": "",
+        "beskrivning": "Användarlicenser för kodrepo och boards"
       },
       {
         "subcat": "Azure Test Plans",
@@ -35,7 +39,8 @@
         "konproj": "9996",
         "rg": "",
         "akt": "789",
-        "projkat": ""
+        "projkat": "",
+        "beskrivning": "Testplaner och testanvändare"
       }
     ]
   },

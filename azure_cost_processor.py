@@ -110,7 +110,10 @@ class AzureCostProcessor:
             if not location_url:
                 self.logger.error("Kunde inte hitta Location-headern i initialt svar. Kan inte fortsätta.")
                 return None
-            self.logger.info(f"Location-header (operationStatus-URL): {location_url}")
+            if self.logger.level == logging.DEBUG:
+                self.logger.info(f"Location-header (operationStatus-URL): {location_url}")
+            else:
+                self.logger.info("Location-header mottagen (operationStatus-URL).")
             match = re.search(r'/operationResults?/([\w-]+)', location_url)
             if match:
                 operation_id = match.group(1)
@@ -129,12 +132,18 @@ class AzureCostProcessor:
                     token = credential.get_token("https://management.azure.com/.default").token
                     headers = {"Authorization": f"Bearer {token}"}
                     response = requests.get(operation_result_url, headers=headers)
-                    self.logger.info(f"Svar från operationResult-URL: {response.text}")
+                    if self.logger.level == logging.DEBUG:
+                        self.logger.info(f"Svar från operationResult-URL: {response.text}")
+                    else:
+                        self.logger.info("Svar mottaget från operationResult-URL.")
                     if response.ok:
                         data = response.json()
                         report_url = data.get("properties", {}).get("downloadUrl")
                         if report_url:
-                            self.logger.info(f"Download URL till rapporten: {report_url}")
+                            if self.logger.level == logging.DEBUG:
+                                self.logger.info(f"Download URL till rapporten: {report_url}")
+                            else:
+                                self.logger.info("Download URL till rapporten mottagen.")
                         else:
                             self.logger.warning("Ingen downloadUrl hittades i operationResult-svaret.")
                     else:
@@ -145,7 +154,10 @@ class AzureCostProcessor:
             if not report_url:
                 self.logger.warning("Kunde inte hitta rapport-URL. Kontrollera loggen för operationResult-svaret.")
             else:
-                self.logger.info(f"Rapport genererad framgångsrikt: {report_url}")
+                if self.logger.level == logging.DEBUG:
+                    self.logger.info(f"Rapport genererad framgångsrikt: {report_url}")
+                else:
+                    self.logger.info("Rapport genererad framgångsrikt.")
             return report_url
         except Exception as e:
             self.logger.error(f"Fel vid generering av detaljerad kostnadsrapport: {str(e)}")
@@ -242,42 +254,22 @@ class AzureCostProcessor:
         except Exception:
             return 'Saknar Billing-tag'
 
-    def load_tag_overrides(self, path="tag_overrides.json"):
+    def load_resource_kontering_config(self, path="kontering_resource_config.json"):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f).get("overrides", [])
+                return json.load(f).get("konteringsregler", [])
         except Exception as e:
-            self.logger.info(f"Ingen tag_overrides.json hittades eller kunde läsas: {e}")
+            self.logger.info(f"Kunde inte läsa konteringsregler: {e}")
             return []
 
-    def get_override_tag(self, overrides, resource_id, tag, usage_date):
-        # usage_date: str (YYYY-MM-DD)
-        for o in overrides:
-            # Case-insensitive glob-matchning på resource_id och tag
-            resource_id_pattern = o.get("resource_id", "*").lower()
-            tag_pattern = o.get("tag", "").lower()
-            match_resource = glob.fnmatch.fnmatch(resource_id.lower(), resource_id_pattern)
-            match_tag = tag.lower() == tag_pattern
-            valid_from = o.get("valid_from")
-            valid_to = o.get("valid_to")
-            in_period = True
-            if valid_from and usage_date < valid_from:
-                in_period = False
-            if valid_to and usage_date > valid_to:
-                in_period = False
-            #print(f"DEBUG: Testar override '{o.get('resource_id')}' mot '{resource_id}' -> {match_resource}, tag: {o.get('tag')} mot {tag} -> {match_tag}, datum: {usage_date}, in_period: {in_period}, value: {o.get('value')}")
-            if match_resource and match_tag and in_period:
-                return o.get("value")
+    def hitta_konteringsregel(self, resource_id, regler):
+        for regel in regler:
+            for pattern in regel.get("resource_ids", []):
+                if glob.fnmatch.fnmatch(str(resource_id).lower(), str(pattern).lower()):
+                    return regel
         return None
 
     def extract_tags(self, row, overrides=None):
-        """
-        Extraherar specifika taggar från Tag-kolumnen och lägger till dem som nya kolumner.
-        Args:
-            row (dict): En rad från kostnadsrapporten
-        Returns:
-            dict: Uppdaterad rad med extraherade taggar
-        """
         # Standardvärden
         row['BillingTag'] = ''
         row['CostCenterTag'] = ''
@@ -327,23 +319,6 @@ class AzureCostProcessor:
             row['BillingAktTag'] = extract_regex('Billing-akt', tags)
             row['BillingKatTag'] = extract_regex('Billing-kat', tags)
             row['BillingDescriptionTag'] = extract_regex('Billing-description', tags)
-
-        # Om overrides finns, tillämpa dem
-        if overrides and "ResourceId" in row and "Date" in row:
-            resource_id = row["ResourceId"]
-            # Konvertera datum till YYYY-MM-DD
-            date_str = row.get("Date", "")
-            if date_str:
-                try:
-                    usage_date = pd.to_datetime(date_str).strftime("%Y-%m-%d")
-                except Exception:
-                    usage_date = ""
-            else:
-                usage_date = ""
-            for tag in ["BillingTag", "CostCenterTag", "BillingRGTag", "BillingProjTag", "BillingAktTag", "BillingKatTag", "BillingDescriptionTag"]:
-                override_val = self.get_override_tag(overrides, resource_id, tag, usage_date)
-                if override_val is not None:
-                    row[tag] = override_val
         return row
 
     def load_kontering_config(self, path="kontering_config.json"):
@@ -370,25 +345,31 @@ class AzureCostProcessor:
             }
 
     def generate_konteringsrader(self, df, config):
-        """
-        Skapar en DataFrame med konteringsrader enligt reglerna i konteringsregler.md.
-        Grupperar och summerar per relevant kombination.
-        Args:
-            df (pd.DataFrame): Kostnadsdata med extraherade taggar
-            config (dict): Inställningar för dummyvärden och 'Godkänt av'
-        Returns:
-            pd.DataFrame: Konteringsrader för export till Excel
-        """
         rows = []
         warnings = []
+        resource_kontering_regler = self.load_resource_kontering_config()
 
         for _, row in df.iterrows():
-            kommentar_beskrivning = ""
-            # Specialfall: Azure DevOps
+            resource_id = row.get("ResourceId", "")
+            regel = self.hitta_konteringsregel(resource_id, resource_kontering_regler)
+            if regel:
+                kontering = {
+                    "Kon/Proj": regel.get("konproj", ""),
+                    "_empty1": "",
+                    "RG": regel.get("rg", ""),
+                    "Aktivitet": regel.get("akt", ""),
+                    "ProjKat": regel.get("projkat", ""),
+                    "_empty2": "",
+                    "Netto": row.get("CostInBillingCurrency", 0),
+                    "Godkänt av": config.get("godkant_av", "John Munthe"),
+                    "KommentarBeskrivning": regel.get("beskrivning", "")
+                }
+                rows.append(kontering)
+                continue
+            # DevOps-logik
             if row.get('MeterCategory') == "Azure DevOps":
                 devops = config.get("devops", {})
                 mapping = devops.get("default", {})
-                # Försök hitta en matchning i mappings
                 mappings = devops.get("mappings", [])
                 subcat = row.get("MeterSubCategory", "")
                 metername = row.get("MeterName", "")
@@ -410,104 +391,58 @@ class AzureCostProcessor:
                 }
                 rows.append(kontering)
                 continue
-
-            # Uppsamlingskontering om ingen Billing-RG eller Billing-proj
-            if not row.get("BillingRGTag") and not row.get("BillingProjTag"):
-                upps = config.get("uppsamlingskontering", {})
-                kommentar_beskrivning = upps.get("beskrivning") or row.get("BillingDescriptionTag", "") or "Ingen beskrivning angiven"
-                kontering = {
-                    "Kon/Proj": upps.get("konproj", "P.201726"),
-                    "_empty1": upps.get("_empty1", ""),
-                    "RG": upps.get("rg", ""),
-                    "Aktivitet": upps.get("akt", "999"),
-                    "ProjKat": upps.get("projkat", "5420"),
-                    "_empty2": upps.get("_empty2", ""),
-                    "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe"),
-                    "KommentarBeskrivning": kommentar_beskrivning
-                }
-                rows.append(kontering)
-                continue
-
-            # Om båda är satta: varning, men behandla som Billing-proj
-            if row.get("BillingRGTag") and row.get("BillingProjTag"):
-                warnings.append(f"Varning: Både Billing-RG och Billing-proj är satta på rad med ResourceId {row.get('ResourceId')}. Behandlas som Billing-proj.")
-
-            # Billing-proj
-            if row.get("BillingProjTag"):
-                kommentar_beskrivning = row.get("BillingDescriptionTag", "") or "Ingen beskrivning angiven"
-                kontering = {
-                    "Kon/Proj": f"P.{row.get('BillingProjTag')}",
-                    "_empty1": "",
-                    "RG": "",
-                    "Aktivitet": row.get("BillingAktTag", ""),
-                    "ProjKat": row.get("BillingKatTag", ""),
-                    "_empty2": "",
-                    "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe"),
-                    "KommentarBeskrivning": kommentar_beskrivning
-                }
-                rows.append(kontering)
-                continue
-
-            # Billing-RG
-            if row.get("BillingRGTag"):
-                kommentar_beskrivning = row.get("BillingDescriptionTag", "") or "Ingen beskrivning angiven"
-                kontering = {
-                    "Kon/Proj": row.get("BillingKatTag", ""),
-                    "_empty1": "",
-                    "RG": row.get("BillingRGTag", ""),
-                    "Aktivitet": row.get("BillingAktTag", ""),
-                    "ProjKat": "",
-                    "_empty2": "",
-                    "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe"),
-                    "KommentarBeskrivning": kommentar_beskrivning
-                }
-                rows.append(kontering)
-                continue
+            # Uppsamlingskontering
+            upps = config.get("uppsamlingskontering", {})
+            kommentar_beskrivning = upps.get("beskrivning") or row.get("BillingDescriptionTag", "") or "Ingen beskrivning angiven"
+            kontering = {
+                "Kon/Proj": upps.get("konproj", "P.201726"),
+                "_empty1": upps.get("_empty1", ""),
+                "RG": upps.get("rg", ""),
+                "Aktivitet": upps.get("akt", "999"),
+                "ProjKat": upps.get("projkat", "5420"),
+                "_empty2": upps.get("_empty2", ""),
+                "Netto": row.get("CostInBillingCurrency", 0),
+                "Godkänt av": config.get("godkant_av", "John Munthe"),
+                "KommentarBeskrivning": kommentar_beskrivning
+            }
+            rows.append(kontering)
 
         # Definiera kolumnordning med unika tomma kolumner
         kolumner = [
             "Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjKat", "_empty2", "Netto", "Godkänt av", "KommentarBeskrivning"
         ]
 
-        # Skapa DataFrame
+        # Skapa DataFrame även om rows är tom
         kontering_df = pd.DataFrame(rows, columns=kolumner)
 
-        # Gruppera och summera per relevant kombination
-        def group_key(row):
-            # Projektkontering: gruppera på Kon/Proj, Aktivitet, ProjKat
-            if row["Kon/Proj"].startswith("P."):
-                return (row["Kon/Proj"], row["Aktivitet"], row["ProjKat"], row["Godkänt av"])
-            # RG-kontering: gruppera på RG, Aktivitet, Kon/Proj
-            else:
-                return (row["RG"], row["Aktivitet"], row["Kon/Proj"], row["Godkänt av"])
-
-        kontering_df["_group"] = kontering_df.apply(group_key, axis=1)
-        grouped = kontering_df.groupby("_group", dropna=False).agg({
-            "Kon/Proj": "first",
-            "_empty1": "first",
-            "RG": "first",
-            "Aktivitet": "first",
-            "ProjKat": "first",
-            "_empty2": "first",
-            "Netto": "sum",
-            "Godkänt av": "first",
-            "KommentarBeskrivning": lambda x: x.iloc[0] if (x.nunique() == 1) else "Ingen beskrivning angiven"
-        }).reset_index(drop=True)
-        kontering_df = grouped
-
-        # Filtrera bort rader där Netto = 0
-        kontering_df = kontering_df[kontering_df["Netto"] != 0]
-
+        # Gruppera och summera per relevant kombination om det finns rader
+        if not kontering_df.empty:
+            def group_key(row):
+                if str(row["Kon/Proj"]).startswith("P."):
+                    return (row["Kon/Proj"], row["Aktivitet"], row["ProjKat"], row["Godkänt av"])
+                else:
+                    return (row["RG"], row["Aktivitet"], row["Kon/Proj"], row["Godkänt av"])
+            kontering_df["_group"] = kontering_df.apply(group_key, axis=1)
+            grouped = kontering_df.groupby("_group", dropna=False).agg({
+                "Kon/Proj": "first",
+                "_empty1": "first",
+                "RG": "first",
+                "Aktivitet": "first",
+                "ProjKat": "first",
+                "_empty2": "first",
+                "Netto": "sum",
+                "Godkänt av": "first",
+                "KommentarBeskrivning": lambda x: x.iloc[0] if (x.nunique() == 1) else "Ingen beskrivning angiven"
+            }).reset_index(drop=True)
+            kontering_df = grouped
+            # Filtrera bort rader där Netto = 0
+            kontering_df = kontering_df[kontering_df["Netto"] != 0]
         # Summeringsrad
-        total = kontering_df["Netto"].sum()
+        total = kontering_df["Netto"].sum() if not kontering_df.empty else 0
         sumrad = {col: "" for col in kontering_df.columns}
         sumrad["Netto"] = total
         sumrad["Kon/Proj"] = "SUMMA"
         kontering_df = pd.concat([kontering_df, pd.DataFrame([sumrad])], ignore_index=True)
-
         return kontering_df, warnings
 
     def export_to_excel(self, df, filename=None):
@@ -728,22 +663,18 @@ class AzureCostProcessor:
                 else:
                     self.logger.warning(f"Kolumnen '{group_col}' saknas i rapporten!")
 
-            # Läs in overrides
-            tag_overrides = self.load_tag_overrides()
-
             # Extrahera costcenter-taggen ur Tags-kolumnen
             if 'Tags' in df.columns:
                 self.logger.info("\nExtraherar taggar ur Tags-kolumnen...")
-                # Använd apply med extract_tags för att extrahera alla taggar, med overrides
-                df = df.apply(lambda row: self.extract_tags(row, tag_overrides), axis=1)
-                
+                # Använd apply med extract_tags för att extrahera alla taggar
+                df = df.apply(lambda row: self.extract_tags(row), axis=1)
                 # Visa subtotaler för de extraherade taggarna
-                for tag_col in ['CostCenterTag', 'BillingTag', 'BillingRGTag', 'BillingProjTag', 'BillingAktTag', 'BillingKatTag']:
+                """ for tag_col in ['CostCenterTag', 'BillingTag', 'BillingRGTag', 'BillingProjTag', 'BillingAktTag', 'BillingKatTag']:
                     if tag_col in df.columns:
                         self.logger.info(f"\nSUBTOTALER per {tag_col}:")
                         tag_subtotals = df.groupby(tag_col)['CostInBillingCurrency'].sum().sort_values(ascending=False)
                         for tag, subtotal in tag_subtotals.items():
-                            self.logger.info(f"  {tag}: {subtotal:,.2f}")
+                            self.logger.info(f"  {tag}: {subtotal:,.2f}") """
             else:
                 self.logger.warning("Kolumnen 'Tags' saknas i rapporten!")
 

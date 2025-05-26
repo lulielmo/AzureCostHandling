@@ -30,6 +30,43 @@
    - Skapa en rutin för att regelbundet kontrollera att alla resurser har rätt taggar
    - Dokumentera taggningskonventioner i teamets wiki eller liknande
 
+## Styr konteringen med konfigurationsfil
+
+För att förenkla och centralisera konteringsreglerna används nu en konfigurationsfil (t.ex. `kontering_resource_config.json`) där du pekar ut vilka resurser som ska konteras på vilket sätt. Detta gör att du slipper tagga varje resurs i Azure och istället styr allt från ett ställe.
+
+### Så fungerar det
+- Du anger en eller flera regler i filen.
+- Varje regel innehåller en lista av `resource_ids` (wildcard eller exakta ResourceId:n) och de konteringsvärden som ska användas.
+- Första matchande regel gäller för en resurs.
+- DevOps och uppsamlingskontering fungerar som tidigare.
+
+### Exempel på konfigurationspost
+```json
+{
+  "resource_ids": [
+    "*/resourceGroups/D365-TESTUPDATE/*",
+    "*/resourceGroups/DynamicsDeployments-westeurope/*"
+  ],
+  "konproj": "P.20210002",
+  "rg": "",
+  "akt": "D365",
+  "projkat": "5420",
+  "beskrivning": "Samtliga D365-relaterade resurser oavsett subscription"
+}
+```
+
+### Principer
+- Du kan använda wildcard (`*`) för att matcha hela subscriptions, resursgrupper eller enskilda resurser.
+- Du kan ha flera regler och kombinera olika nivåer av precision.
+- Om ingen regel matchar används uppsamlingskonteringen.
+
+### Så här gör du
+1. Skapa eller uppdatera filen `kontering_resource_config.json` enligt exemplen ovan.
+2. Lägg till, ta bort eller ändra regler efter behov.
+3. När du kör skriptet kommer det att använda dessa regler för att styra konteringen.
+
+Kontakta systemansvarig om du vill ha hjälp att lägga till nya regler eller om du är osäker på hur du ska formulera ett wildcard.
+
 ## Taggar och konteringslogik
 
 ### Taggar som används:

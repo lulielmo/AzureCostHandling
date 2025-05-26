@@ -1,0 +1,50 @@
+{
+  "konteringsregler": [
+    {
+      "resource_ids": [
+        "*/subscriptions/8fadbdd3-a853-4e62-b333-4ac4499f3d96/*"
+      ],
+      "konproj": "P.98116002",
+      "rg": "",
+      "akt": "006",
+      "projkat": "6540",
+      "beskrivning": "POC ai-assistent intranät"
+    },
+    {
+        "resource_ids": [
+          "*/resourceGroups/Marknad_AllOut/*"
+        ],
+        "konproj": "P.20210002",
+        "rg": "14000",
+        "akt": "999",
+        "projkat": "5910",
+        "beskrivning": "Marknad Dashboard"
+      },
+    {
+      "resource_ids": [
+        "*/resourceGroups/D365-TESTUPDATE/*",
+        "*/resourceGroups/DynamicsDeployments-westeurope/*",
+        "*/resourceGroups/d365_lcs_network/*",
+        "*/resourceGroups/d365-build01/*",
+        "*/resourceGroups/d365-common/*"
+      ],
+      "konproj": "P.08245002",
+      "rg": "",
+      "akt": "738",
+      "projkat": "6540",
+      "beskrivning": "Samtliga D365-relaterade resurser oavsett subscription"
+    },
+    {
+      "resource_ids": [
+        "*/resourceGroups/int_common_api/providers/microsoft.web/sites/nissmstestapi",
+        "*/resourceGroups/int_common_api/providers/microsoft.web/sites/skabviol3",
+        "*/resourceGroups/int_common_api/providers/microsoft.web/sites/silonivaer"
+      ],
+      "konproj": "P.20210003",
+      "rg": "",
+      "akt": "API-TEST",
+      "projkat": "5420",
+      "beskrivning": "Specifika API-tjänster i int_common_api"
+    }
+  ]
+}

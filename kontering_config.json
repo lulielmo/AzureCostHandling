@@ -18,19 +18,19 @@
       {
         "subcat": "Azure Pipelines",
         "metername": "Microsoft-hosted CI/CD Concurrent Job",
-        "konproj": "9998",
+        "konproj": "P.20257601",
         "rg": "",
-        "akt": "123",
-        "projkat": "",
+        "akt": "738",
+        "projkat": "5420",
         "beskrivning": "Bygg- och deploy-pipelines (CI/CD)"
       },
       {
         "subcat": "Azure Repos and Boards (Basic)",
         "metername": "Basic User",
-        "konproj": "9997",
-        "rg": "",
-        "akt": "456",
-        "projkat": "",
+        "konproj": "",
+        "rg": "19003",
+        "akt": "738",
+        "projkat": "5420",
         "beskrivning": "Användarlicenser för Devops basicanvändare"
       },
       {

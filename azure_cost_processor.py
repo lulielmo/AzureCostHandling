@@ -16,6 +16,7 @@ import re
 import os
 import argparse
 import json
+import glob
 
 # Konfigurera loggning
 def setup_logging(verbose=False):
@@ -241,7 +242,35 @@ class AzureCostProcessor:
         except Exception:
             return 'Saknar Billing-tag'
 
-    def extract_tags(self, row):
+    def load_tag_overrides(self, path="tag_overrides.json"):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f).get("overrides", [])
+        except Exception as e:
+            self.logger.info(f"Ingen tag_overrides.json hittades eller kunde läsas: {e}")
+            return []
+
+    def get_override_tag(self, overrides, resource_id, tag, usage_date):
+        # usage_date: str (YYYY-MM-DD)
+        for o in overrides:
+            # Case-insensitive glob-matchning på resource_id och tag
+            resource_id_pattern = o.get("resource_id", "*").lower()
+            tag_pattern = o.get("tag", "").lower()
+            match_resource = glob.fnmatch.fnmatch(resource_id.lower(), resource_id_pattern)
+            match_tag = tag.lower() == tag_pattern
+            valid_from = o.get("valid_from")
+            valid_to = o.get("valid_to")
+            in_period = True
+            if valid_from and usage_date < valid_from:
+                in_period = False
+            if valid_to and usage_date > valid_to:
+                in_period = False
+            #print(f"DEBUG: Testar override '{o.get('resource_id')}' mot '{resource_id}' -> {match_resource}, tag: {o.get('tag')} mot {tag} -> {match_tag}, datum: {usage_date}, in_period: {in_period}, value: {o.get('value')}")
+            if match_resource and match_tag and in_period:
+                return o.get("value")
+        return None
+
+    def extract_tags(self, row, overrides=None):
         """
         Extraherar specifika taggar från Tag-kolumnen och lägger till dem som nya kolumner.
         Args:
@@ -298,6 +327,23 @@ class AzureCostProcessor:
             row['BillingAktTag'] = extract_regex('Billing-akt', tags)
             row['BillingKatTag'] = extract_regex('Billing-kat', tags)
             row['BillingDescriptionTag'] = extract_regex('Billing-description', tags)
+
+        # Om overrides finns, tillämpa dem
+        if overrides and "ResourceId" in row and "Date" in row:
+            resource_id = row["ResourceId"]
+            # Konvertera datum till YYYY-MM-DD
+            date_str = row.get("Date", "")
+            if date_str:
+                try:
+                    usage_date = pd.to_datetime(date_str).strftime("%Y-%m-%d")
+                except Exception:
+                    usage_date = ""
+            else:
+                usage_date = ""
+            for tag in ["BillingTag", "CostCenterTag", "BillingRGTag", "BillingProjTag", "BillingAktTag", "BillingKatTag", "BillingDescriptionTag"]:
+                override_val = self.get_override_tag(overrides, resource_id, tag, usage_date)
+                if override_val is not None:
+                    row[tag] = override_val
         return row
 
     def load_kontering_config(self, path="kontering_config.json"):
@@ -575,7 +621,37 @@ class AzureCostProcessor:
         # Skriv ut kommentarerna numrerat direkt från kontering_df (utom summeringsraden)
         for idx, row in enumerate(kontering_df.iloc[:-1].itertuples(index=False), 1):
             kommentar = getattr(row, "KommentarBeskrivning", "")
-            print(f"{idx}. {kommentar}, period: {period}")
+            # Om kommentaren är "Ingen beskrivning angiven", försök hitta unika BillingDescriptionTag i matchande rader
+            if kommentar == "Ingen beskrivning angiven":
+                row_dict = row._asdict()
+                kon_proj = row_dict.get("Kon/Proj")
+                aktivitet = row_dict.get("Aktivitet")
+                projkat = row_dict.get("ProjKat")
+                godkant_av = row_dict.get("Godkänt av")
+                rg = row_dict.get("RG")
+                # Hitta matchande rader i df för denna konteringsrad
+                if str(kon_proj).startswith("P."):
+                    group = (kon_proj, aktivitet, projkat, godkant_av)
+                elif rg:
+                    group = (rg, aktivitet, kon_proj, godkant_av)
+                else:
+                    group = (rg, aktivitet, projkat, godkant_av)
+                # Hämta matchande rader ur df (ursprungsdata)
+                match_rows = df.copy()
+                match_rows["_group"] = match_rows.apply(lambda r: (f"P.{r['BillingProjTag']}" if str(r.get("BillingProjTag", "")).startswith("P.") or str(r.get("BillingProjTag", "")).isdigit() else r.get("BillingRGTag", ""), r.get("BillingAktTag", ""), r.get("BillingKatTag", ""), kontering_config.get("godkant_av", "John Munthe")), axis=1)
+                match_rows = match_rows[match_rows["_group"] == group]
+                descs = match_rows["BillingDescriptionTag"].dropna().unique()
+                descs = [d for d in descs if d and str(d).strip() != ""]
+                if len(descs) == 1:
+                    kommentar = f"Avser: {descs[0]}"
+                elif len(descs) > 1:
+                    kommentar = f"Flera beskrivningar: {', '.join(descs)}"
+                else:
+                    kommentar = f"Ingen beskrivning angiven"
+            # Lägg bara till perioden om den inte redan finns i kommentaren
+            if "period:" not in kommentar:
+                kommentar = f"{kommentar}, period: {period}"
+            print(f"{idx}. {kommentar}")
 
     def process_cost_data(self, report_url=None, local_file_path=None):
         """
@@ -652,11 +728,14 @@ class AzureCostProcessor:
                 else:
                     self.logger.warning(f"Kolumnen '{group_col}' saknas i rapporten!")
 
+            # Läs in overrides
+            tag_overrides = self.load_tag_overrides()
+
             # Extrahera costcenter-taggen ur Tags-kolumnen
             if 'Tags' in df.columns:
                 self.logger.info("\nExtraherar taggar ur Tags-kolumnen...")
-                # Använd apply med extract_tags för att extrahera alla taggar
-                df = df.apply(self.extract_tags, axis=1)
+                # Använd apply med extract_tags för att extrahera alla taggar, med overrides
+                df = df.apply(lambda row: self.extract_tags(row, tag_overrides), axis=1)
                 
                 # Visa subtotaler för de extraherade taggarna
                 for tag_col in ['CostCenterTag', 'BillingTag', 'BillingRGTag', 'BillingProjTag', 'BillingAktTag', 'BillingKatTag']:

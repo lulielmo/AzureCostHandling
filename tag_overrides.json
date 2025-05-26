@@ -1,0 +1,18 @@
+{
+  "overrides": [
+    {
+        "resource_id": "*/resourceGroups/rg_aibot_test_001/*",
+        "tag": "BillingAktTag",
+        "value": "050",
+        "valid_from": "2025-05-01",
+        "valid_to": null
+      },
+      {
+        "resource_id": "*/resourceGroups/skekraftindexer-rg-test-001/*",
+        "tag": "BillingAktTag",
+        "value": "050",
+        "valid_from": "2025-05-01",
+        "valid_to": null
+      }
+  ]
+} 

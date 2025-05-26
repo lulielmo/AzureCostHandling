@@ -31,16 +31,16 @@
         "rg": "",
         "akt": "456",
         "projkat": "",
-        "beskrivning": "Användarlicenser för kodrepo och boards"
+        "beskrivning": "Användarlicenser för Devops basicanvändare"
       },
       {
         "subcat": "Azure Test Plans",
         "metername": "Standard User",
-        "konproj": "9996",
+        "konproj": "P.20219203",
         "rg": "",
-        "akt": "789",
-        "projkat": "",
-        "beskrivning": "Testplaner och testanvändare"
+        "akt": "738",
+        "projkat": "5420",
+        "beskrivning": "Devops Testplaner och testanvändare dynawayprojektet"
       }
     ]
   },

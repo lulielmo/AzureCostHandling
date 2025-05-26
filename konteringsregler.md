@@ -71,4 +71,38 @@
 
 ## Övrigt
 - Summeringsrad i slutet för att validera att konteringen täcker hela fakturabeloppet.
-- All logik och konteringsregler ska vara dokumenterade och konfigurerbara där det är möjligt. 
+- All logik och konteringsregler ska vara dokumenterade och konfigurerbara där det är möjligt.
+
+## Tidsstyrda tagg-override (avancerat)
+
+I vissa fall kan det vara nödvändigt att ändra konteringsregler retroaktivt eller från ett visst datum, t.ex. om en tagg varit felaktig under en period. Detta kan göras med hjälp av filen `tag_overrides.json`.
+
+Exempel på innehåll:
+
+```json
+{
+  "overrides": [
+    {
+      "resource_id": "*/resourceGroups/mygroup/*",
+      "tag": "Billing-akt",
+      "value": "006",
+      "valid_from": "2024-01-01",
+      "valid_to": "2024-05-15"
+    },
+    {
+      "resource_id": "*/resourceGroups/mygroup/*",
+      "tag": "Billing-akt",
+      "value": "050",
+      "valid_from": "2024-05-16",
+      "valid_to": null
+    }
+  ]
+}
+```
+
+- `resource_id` kan vara ett mönster (wildcard) som matchar ResourceId i rapporten.
+- `tag` är namnet på taggen som ska skrivas över.
+- `value` är det värde som ska användas under perioden.
+- `valid_from` och `valid_to` anger under vilken period override gäller (format: YYYY-MM-DD).
+
+Om en override finns för en resurs, tagg och datum används override-värdet istället för det som står i rapporten. Annars används taggen från rapporten som vanligt. 

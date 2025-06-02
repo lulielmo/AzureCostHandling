@@ -8,13 +8,20 @@ Ett Python-verktyg för att automatisera hantering av Azure-kostnadsrapporter oc
 - Generering av kostnadsrapporter
 - Automatisk nedladdning av rapporter
 - Konvertering till konteringsformat i Excel
+- **Central styrning av konteringsregler via kontering_resource_config.json**
+
+## Viktigt om konteringsregler
+
+> **OBS!** Du behöver inte längre tagga resurser i Azure för konteringssyfte. All gruppering och kontering styrs nu via mönster (wildcards) på ResourceId i filen `kontering_resource_config.json`.
+>
+> Se [konteringsregler.md](konteringsregler.md) för detaljerade instruktioner och exempel på hur du klumpar ihop kostnader baserat på sökvägar i ResourceId.
 
 ## Dokumentation
 
 Detta repository innehåller två huvudsakliga dokument:
 
 - **README.md** (denna fil): Innehåller instruktioner för installation, konfiguration och grundläggande användning av verktyget.
-- **[konteringsregler.md](konteringsregler.md)**: Innehåller detaljerade regler och instruktioner för hur kostnader ska konteras, inklusive taggningskonventioner i Azure.
+- **[konteringsregler.md](konteringsregler.md)**: Innehåller detaljerade regler och instruktioner för hur kostnader ska konteras, inklusive hur du arbetar med resourceId-mönster.
 
 ## Installation
 

@@ -3,32 +3,41 @@
 ## Bakgrund
 - Azurekostnader faktureras via Atea utan detaljerad resursinformation.
 - Vi laddar ner detaljerad kostnadsrapport från Azure och skapar konteringsrader för Medius.
-- Taggningen i Azure är under uppbyggnad och kan saknas eller vara ofullständig.
 
-## Taggning i Azure
+## Ordlista: Fält i konteringskonfigurationen
 
-### Viktigt att veta
-- Taggar ärvs **inte** mellan nivåer i Azure (t.ex. från resursgrupp till resurser)
-- För att få korrekta konteringsrader måste taggarna sättas på **resursnivå**
-- Om en resursgrupp har taggar men resurserna i gruppen inte har det, kommer kostnaderna för resurserna inte att inkluderas i konteringsrapporten
+- **konproj**: Projektkod (t.ex. "P.98116002"). Används om konteringen ska läggas mot en projekt.
+- **rg**: Rörelsegren (t.ex. 74000), används om konteringen ska läggas mot en rörelsegren.
+- **akt**: Aktivitetskod (t.ex. "738", "999", "050").
+- **projkat**: Konto (t.ex. "6540", "5910"). Läggs i fältet ProjKat om kontering sker mot projekt eller i fältet KonProj om kontering sker mot rörelsegren.
+- **beskrivning**: Fri text som beskriver vad raden avser (används som kommentar i Medius).
 
-### Hur man taggar
-1. **För resursgrupper:**
-   - Sätt taggarna direkt på resursgruppen för att dokumentera avsikten
-   - Men kom ihåg att detta inte påverkar konteringsrapporten
+Dessa fält anges i regler i filerna `kontering_resource_config.json` (för vanliga resurser) och `kontering_config.json` (för DevOps och uppsamlingskontering).
 
-2. **För resurser:**
-   - Sätt följande taggar på **varje resurs** som ska konteras:
-     - `Billing-RG` (om resursen ska konteras på resursgruppsnivå)
-     - `Billing-proj` (om resursen ska konteras på projektnivå)
-     - `Billing-kat` (för konteringskategori)
-     - `Billing-akt` (för aktivitetskod)
-   - Detta kan göras manuellt i Azure Portal eller via Azure CLI/PowerShell
+## Konteringslogik
 
-3. **Bästa praxis:**
-   - Använd Azure Policy för att automatiskt tillämpa taggar på nya resurser
-   - Skapa en rutin för att regelbundet kontrollera att alla resurser har rätt taggar
-   - Dokumentera taggningskonventioner i teamets wiki eller liknande
+Konteringsrader skapas genom att varje rad i kostnadsrapporten matchas mot regler i konfigurationsfilerna:
+
+1. **kontering_resource_config.json**: Här anges regler med `resource_ids` (wildcards eller exakta sökvägar). Första matchande regel styr konteringen för raden och anger värden för konproj, rg, akt, projkat och beskrivning.
+2. **kontering_config.json**:
+   - Om raden gäller Azure DevOps (MeterCategory = "Azure DevOps") används DevOps-reglerna.
+   - Om ingen regel matchar används uppsamlingskonteringen.
+
+Varje konteringsrad får sina värden direkt från dessa regler. Ingen taggning i Azure krävs längre för konteringssyfte.
+
+### Exempel på konteringsrader (en projektkontering och en rörelsegrenskontering):
+> **OBS!** De tomma kolumnerna (markerade med |) är avsiktliga och behövs för att Excel-filen ska kunna importeras korrekt i Medius.
+
+| Kon/Proj   | | RG    | Aktivitet | ProjKat | | Netto    | Godkänt av   |
+|------------|-|-------|-----------|---------|-|----------|--------------|
+| P.98116002 | |       | 006       | 6540    | | 9133,89  | John Munthe  |
+| 6540       | | 14000 | 999       |         | | 5764,76  | John Munthe  |
+
+Se övriga sektioner för exempel på hur du bygger regler och grupperar resurser.
+
+## Viktigt: All konteringsstyrning sker nu via konfigurationsfil
+
+> **OBS!** Du behöver inte längre tagga resurser i Azure för konteringssyfte. All gruppering och kontering styrs nu via mönster (wildcards) på ResourceId i filen `kontering_resource_config.json`.
 
 ## Styr konteringen med konfigurationsfil
 
@@ -65,37 +74,51 @@ För att förenkla och centralisera konteringsreglerna används nu en konfigurat
 2. Lägg till, ta bort eller ändra regler efter behov.
 3. När du kör skriptet kommer det att använda dessa regler för att styra konteringen.
 
+#### Fler exempel på gruppering med resourceId-mönster
+- **Alla resurser i en subscription:**
+  ```json
+  "resource_ids": ["*/subscriptions/<subscription-id>/*"]
+  ```
+- **Alla resurser i en eller flera resursgrupper:**
+  ```json
+  "resource_ids": ["*/resourceGroups/rg1/*", "*/resourceGroups/rg2/*"]
+  ```
+- **Enskilda resurser:**
+  ```json
+  "resource_ids": ["*/resourceGroups/rg1/providers/microsoft.web/sites/minapp"]
+  ```
+
 Kontakta systemansvarig om du vill ha hjälp att lägga till nya regler eller om du är osäker på hur du ska formulera ett wildcard.
 
-## Taggar och konteringslogik
+## Konfigurationsvärden och konteringslogik
 
-### Taggar som används:
-- **Billing-RG**
-- **Billing-proj**
-- **Billing-kat**
-- **Billing-akt**
+### Värden som används:
+- **rg**
+- **konproj**
+- **projkat**
+- **akt**
 
 ### Regler för konteringsrader:
-- **Endast en av Billing-RG eller Billing-proj ska vara satt per rad.**
-    - Om båda är satta: logga varning, men behandla raden som Billing-proj.
-- **Om Billing-RG är satt:**
-    - RG = Billing-RG
-    - Kon/Proj = Billing-kat
-    - Aktivitet = Billing-akt
+- **Endast en av rg eller konproj ska vara satt per rad.**
+    - Om båda är satta: logga varning, men behandla raden som projektkontering.
+- **Om rg är satt (rörelsegrenskontering):**
+    - RG = rg
+    - Kon/Proj = projkat
+    - Aktivitet = akt
     - ProjKat lämnas tom
-- **Om Billing-proj är satt:**
-    - Kon/Proj = P.{Billing-proj}
-    - ProjKat = Billing-kat
-    - Aktivitet = Billing-akt
+- **Om Billing-proj är satt (projektkontering):**
+    - Kon/Proj = P.{konproj}
+    - ProjKat = projkat
+    - Aktivitet = akt
     - RG lämnas tom
 
 ### Specialfall:
 - **Azure DevOps-kostnader** (MeterCategory = "Azure DevOps"):
-    - Kan inte taggas, grupperas på MeterSubCategory.
+    - Kan inte grupperas på resurs-id, grupperas på MeterSubCategory.
     - Konteras på särskild (konfigurerbar) kontering.
-- **Rader utan Billing-RG eller Billing-proj:**
+- **Rader som saknar konfiguration som pekar ut rg eller konproj:**
     - Läggs på en uppsamlingskontering (konfigurerbar).
-    - Allteftersom taggningen förbättras minskar denna post.
+    - Allteftersom konfigurationen förbättras minskar denna post.
 
 ## Excel-kolumner för Medius
 - **Kon/Proj**
@@ -108,38 +131,4 @@ Kontakta systemansvarig om du vill ha hjälp att lägga till nya regler eller om
 
 ## Övrigt
 - Summeringsrad i slutet för att validera att konteringen täcker hela fakturabeloppet.
-- All logik och konteringsregler ska vara dokumenterade och konfigurerbara där det är möjligt.
-
-## Tidsstyrda tagg-override (avancerat)
-
-I vissa fall kan det vara nödvändigt att ändra konteringsregler retroaktivt eller från ett visst datum, t.ex. om en tagg varit felaktig under en period. Detta kan göras med hjälp av filen `tag_overrides.json`.
-
-Exempel på innehåll:
-
-```json
-{
-  "overrides": [
-    {
-      "resource_id": "*/resourceGroups/mygroup/*",
-      "tag": "Billing-akt",
-      "value": "006",
-      "valid_from": "2024-01-01",
-      "valid_to": "2024-05-15"
-    },
-    {
-      "resource_id": "*/resourceGroups/mygroup/*",
-      "tag": "Billing-akt",
-      "value": "050",
-      "valid_from": "2024-05-16",
-      "valid_to": null
-    }
-  ]
-}
-```
-
-- `resource_id` kan vara ett mönster (wildcard) som matchar ResourceId i rapporten.
-- `tag` är namnet på taggen som ska skrivas över.
-- `value` är det värde som ska användas under perioden.
-- `valid_from` och `valid_to` anger under vilken period override gäller (format: YYYY-MM-DD).
-
-Om en override finns för en resurs, tagg och datum används override-värdet istället för det som står i rapporten. Annars används taggen från rapporten som vanligt. 
+- All logik och konteringsregler ska vara dokumenterade och konfigurerbara där det är möjligt. 

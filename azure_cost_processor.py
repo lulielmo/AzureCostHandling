@@ -12,11 +12,11 @@ import pandas as pd
 import config
 import time
 import requests
-import re
 import os
 import argparse
 import json
 import glob
+import re
 
 # Konfigurera loggning
 def setup_logging(verbose=False):
@@ -163,113 +163,7 @@ class AzureCostProcessor:
             self.logger.error(f"Fel vid generering av detaljerad kostnadsrapport: {str(e)}")
             raise
 
-    def analyze_cost_columns(self, df):
-        """
-        Analyserar olika kostnadskolumner i rapporten för att identifiera skillnader och mönster.
-        Args:
-            df (pd.DataFrame): DataFrame med kostnadsdata
-        """
-        cost_columns = ['CostInBillingCurrency', 'EffectivePrice', 'UnitPrice', 'PayGPrice']
-        
-        self.logger.info("\nAnalys av kostnadskolumner:")
-        self.logger.info("-" * 50)
-        
-        # Kontrollera vilka kolumner som finns i rapporten
-        available_columns = [col for col in cost_columns if col in df.columns]
-        self.logger.info(f"Tillgängliga kostnadskolumner: {', '.join(available_columns)}")
-        
-        # Grundläggande statistik för varje kolumn
-        for col in available_columns:
-            self.logger.info(f"\nStatistik för {col}:")
-            stats = df[col].describe()
-            self.logger.info(f"Antal värden: {stats['count']}")
-            self.logger.info(f"Medelvärde: {stats['mean']:.2f}")
-            self.logger.info(f"Min: {stats['min']:.2f}")
-            self.logger.info(f"Max: {stats['max']:.2f}")
-            
-            # Räkna antal unika värden
-            unique_count = df[col].nunique()
-            self.logger.info(f"Antal unika värden: {unique_count}")
-            
-            # Visa de vanligaste värdena
-            if unique_count < 10:  # Bara visa om det är få unika värden
-                self.logger.info("\nVanligaste värdena:")
-                value_counts = df[col].value_counts().head(5)
-                for value, count in value_counts.items():
-                    self.logger.info(f"  {value}: {count} gånger")
-        
-        # Jämför CostInBillingCurrency med andra kolumner
-        if 'CostInBillingCurrency' in df.columns:
-            self.logger.info("\nJämförelse med CostInBillingCurrency:")
-            for col in available_columns:
-                if col != 'CostInBillingCurrency':
-                    # Beräkna skillnaden mellan kolumnerna
-                    diff = df[col] - df['CostInBillingCurrency']
-                    self.logger.info(f"\nSkillnad mellan {col} och CostInBillingCurrency:")
-                    self.logger.info(f"  Medelvärde av skillnad: {diff.mean():.2f}")
-                    self.logger.info(f"  Max skillnad: {diff.max():.2f}")
-                    self.logger.info(f"  Min skillnad: {diff.min():.2f}")
-                    
-                    # Räkna hur många rader som skiljer sig
-                    different_rows = (diff != 0).sum()
-                    total_rows = len(df)
-                    self.logger.info(f"  Antal rader som skiljer sig: {different_rows} av {total_rows} ({(different_rows/total_rows*100):.1f}%)")
-
-    def extract_costcenter_tag(self, tags_str):
-        """
-        Extraherar värdet för 'costcenter' ur en Tags-sträng.
-        Args:
-            tags_str (str): Tags-kolumnens innehåll
-        Returns:
-            str: Värdet på costcenter-taggen eller 'Saknar costcenter-tag'
-        """
-        if pd.isna(tags_str):
-            return 'Saknar costcenter-tag'
-        try:
-            # Försök hitta "costcenter": "xxxx"
-            match = re.search(r'"costcenter"\s*:\s*"([^"]+)"', tags_str, re.IGNORECASE)
-            if match:
-                return match.group(1)
-            else:
-                return 'Saknar costcenter-tag'
-        except Exception:
-            return 'Saknar costcenter-tag'
-
-    def extract_billing_tag(self, tags_str):
-        """
-        Extraherar värdet för 'Billing' ur en Tags-sträng.
-        Args:
-            tags_str (str): Tags-kolumnens innehåll
-        Returns:
-            str: Värdet på Billing-taggen eller 'Saknar Billing-tag'
-        """
-        if pd.isna(tags_str):
-            return 'Saknar Billing-tag'
-        try:
-            match = re.search(r'"Billing"\s*:\s*"([^"]+)"', tags_str, re.IGNORECASE)
-            if match:
-                return match.group(1)
-            else:
-                return 'Saknar Billing-tag'
-        except Exception:
-            return 'Saknar Billing-tag'
-
-    def load_resource_kontering_config(self, path="kontering_resource_config.json"):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f).get("konteringsregler", [])
-        except Exception as e:
-            self.logger.info(f"Kunde inte läsa konteringsregler: {e}")
-            return []
-
-    def hitta_konteringsregel(self, resource_id, regler):
-        for regel in regler:
-            for pattern in regel.get("resource_ids", []):
-                if glob.fnmatch.fnmatch(str(resource_id).lower(), str(pattern).lower()):
-                    return regel
-        return None
-
-    def extract_tags(self, row, overrides=None):
+    def extract_tags(self, row):
         # Standardvärden
         row['BillingTag'] = ''
         row['CostCenterTag'] = ''
@@ -308,6 +202,7 @@ class AzureCostProcessor:
             # Fallback: regex för "key": "value"
             def extract_regex(tag, s):
                 try:
+                    import re
                     match = re.search(rf'"{tag}"\s*:\s*"([^"]+)"', s, re.IGNORECASE)
                     return match.group(1) if match else ''
                 except Exception:
@@ -320,6 +215,21 @@ class AzureCostProcessor:
             row['BillingKatTag'] = extract_regex('Billing-kat', tags)
             row['BillingDescriptionTag'] = extract_regex('Billing-description', tags)
         return row
+
+    def load_resource_kontering_config(self, path="kontering_resource_config.json"):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f).get("konteringsregler", [])
+        except Exception as e:
+            self.logger.info(f"Kunde inte läsa konteringsregler: {e}")
+            return []
+
+    def hitta_konteringsregel(self, resource_id, regler):
+        for regel in regler:
+            for pattern in regel.get("resource_ids", []):
+                if glob.fnmatch.fnmatch(str(resource_id).lower(), str(pattern).lower()):
+                    return regel
+        return None
 
     def load_kontering_config(self, path="kontering_config.json"):
         try:
@@ -668,18 +578,8 @@ class AzureCostProcessor:
                 self.logger.info("\nExtraherar taggar ur Tags-kolumnen...")
                 # Använd apply med extract_tags för att extrahera alla taggar
                 df = df.apply(lambda row: self.extract_tags(row), axis=1)
-                # Visa subtotaler för de extraherade taggarna
-                """ for tag_col in ['CostCenterTag', 'BillingTag', 'BillingRGTag', 'BillingProjTag', 'BillingAktTag', 'BillingKatTag']:
-                    if tag_col in df.columns:
-                        self.logger.info(f"\nSUBTOTALER per {tag_col}:")
-                        tag_subtotals = df.groupby(tag_col)['CostInBillingCurrency'].sum().sort_values(ascending=False)
-                        for tag, subtotal in tag_subtotals.items():
-                            self.logger.info(f"  {tag}: {subtotal:,.2f}") """
             else:
                 self.logger.warning("Kolumnen 'Tags' saknas i rapporten!")
-
-            # Analysera kostnadskolumner
-            # self.analyze_cost_columns(df)
 
             # Efter bearbetning: exportera till Excel
             self.export_to_excel(df)

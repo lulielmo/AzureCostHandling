@@ -1,6 +1,6 @@
 # TODO
 
-- [ ] Då kontering sker på RG så ska kontot (t.ex. 5430) vara i kolumnen Kon/Proj och inte i ProjKat såsom den är nu. Kontot ska bara vara i ProjKat då det är projektkontering.
+- [x] Då kontering sker på RG så ska kontot (t.ex. 5430) vara i kolumnen Kon/Proj och inte i ProjKat såsom den är nu. Kontot ska bara vara i ProjKat då det är projektkontering.
 
 - [ ] Utvärdera om rollen **Cost Management Reader** behöver vara kvar på service principalen.
     - Om vi i framtiden vill köra rapporter direkt mot en eller flera subscriptions kan rollen behövas.

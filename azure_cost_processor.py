@@ -259,22 +259,72 @@ class AzureCostProcessor:
         warnings = []
         resource_kontering_regler = self.load_resource_kontering_config()
 
+        def build_kontering_row(kontering_src, belopp, kommentar, godkant_av):
+            """
+            Bygger en konteringsrad enligt reglerna:
+            - Endast en av rg eller konproj ska vara satt per rad.
+            - Om båda är satta: logga varning, men behandla raden som projektkontering.
+            - Om rg är satt (rörelsegrenskontering):
+                RG = rg
+                Kon/Proj = projkat
+                ProjKat lämnas tom
+            - Om konproj är satt (projektkontering):
+                Kon/Proj = konproj
+                ProjKat = projkat
+                RG lämnas tom
+            """
+            konproj_val = str(kontering_src.get("konproj", "") or "").strip()
+            rg_val = str(kontering_src.get("rg", "") or "").strip()
+            akt_val = str(kontering_src.get("akt", "") or "").strip()
+            projakt_val = str(kontering_src.get("projakt", "") or "").strip()
+            projkat_val = str(kontering_src.get("projkat", "") or "").strip()
+
+            # Bestäm typ av kontering
+            if konproj_val and rg_val:
+                warnings.append(
+                    f"Konteringsregel har både konproj och rg satta (konproj={konproj_val}, rg={rg_val}). "
+                    "Behandlar som projektkontering."
+                )
+                rg_out = ""
+                konproj_out = konproj_val
+                projkat_out = projkat_val
+            elif konproj_val:
+                rg_out = ""
+                konproj_out = konproj_val
+                projkat_out = projkat_val
+            elif rg_val:
+                rg_out = rg_val
+                konproj_out = projkat_val
+                projkat_out = ""
+            else:
+                # Fallback om varken rg eller konproj är satt: lägg kontot i Kon/Proj
+                rg_out = ""
+                konproj_out = projkat_val
+                projkat_out = ""
+
+            return {
+                "Kon/Proj": konproj_out,
+                "_empty1": "",
+                "RG": rg_out,
+                "Aktivitet": akt_val,
+                "ProjAkt": projakt_val,
+                "ProjKat": projkat_out,
+                "_empty2": "",
+                "Netto": belopp,
+                "Godkänt av": godkant_av,
+                "KommentarBeskrivning": kommentar or ""
+            }
+
         for _, row in df.iterrows():
             resource_id = row.get("ResourceId", "")
             regel = self.hitta_konteringsregel(resource_id, resource_kontering_regler)
             if regel:
-                kontering = {
-                    "Kon/Proj": regel.get("konproj", ""),
-                    "_empty1": "",
-                    "RG": regel.get("rg", ""),
-                    "Aktivitet": regel.get("akt", ""),
-                    "ProjAkt": regel.get("projakt", ""),
-                    "ProjKat": regel.get("projkat", ""),
-                    "_empty2": "",
-                    "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe"),
-                    "KommentarBeskrivning": regel.get("beskrivning", "")
-                }
+                kontering = build_kontering_row(
+                    regel,
+                    belopp=row.get("CostInBillingCurrency", 0),
+                    kommentar=regel.get("beskrivning", ""),
+                    godkant_av=config.get("godkant_av", "John Munthe"),
+                )
                 rows.append(kontering)
                 continue
             # DevOps-logik
@@ -289,35 +339,23 @@ class AzureCostProcessor:
                         mapping = m
                         break
                 kommentar_beskrivning = mapping.get("beskrivning") or f"Avser Azure DevOps: {subcat} ({metername})"
-                kontering = {
-                    "Kon/Proj": mapping.get("konproj", "9999"),
-                    "_empty1": mapping.get("_empty1", ""),
-                    "RG": mapping.get("rg", ""),
-                    "Aktivitet": mapping.get("akt", ""),
-                    "ProjAkt": mapping.get("projakt", ""),
-                    "ProjKat": mapping.get("projkat", ""),
-                    "_empty2": mapping.get("_empty2", ""),
-                    "Netto": row.get("CostInBillingCurrency", 0),
-                    "Godkänt av": config.get("godkant_av", "John Munthe"),
-                    "KommentarBeskrivning": kommentar_beskrivning
-                }
+                kontering = build_kontering_row(
+                    mapping,
+                    belopp=row.get("CostInBillingCurrency", 0),
+                    kommentar=kommentar_beskrivning,
+                    godkant_av=config.get("godkant_av", "John Munthe"),
+                )
                 rows.append(kontering)
                 continue
             # Uppsamlingskontering
             upps = config.get("uppsamlingskontering", {})
             kommentar_beskrivning = upps.get("beskrivning") or row.get("BillingDescriptionTag", "") or "Ingen beskrivning angiven"
-            kontering = {
-                "Kon/Proj": upps.get("konproj", "P.201726"),
-                "_empty1": upps.get("_empty1", ""),
-                "RG": upps.get("rg", ""),
-                "Aktivitet": upps.get("akt", "999"),
-                "ProjAkt": upps.get("projakt", ""),
-                "ProjKat": upps.get("projkat", "5420"),
-                "_empty2": upps.get("_empty2", ""),
-                "Netto": row.get("CostInBillingCurrency", 0),
-                "Godkänt av": config.get("godkant_av", "John Munthe"),
-                "KommentarBeskrivning": kommentar_beskrivning
-            }
+            kontering = build_kontering_row(
+                upps,
+                belopp=row.get("CostInBillingCurrency", 0),
+                kommentar=kommentar_beskrivning,
+                godkant_av=config.get("godkant_av", "John Munthe"),
+            )
             rows.append(kontering)
 
         # Definiera kolumnordning med unika tomma kolumner

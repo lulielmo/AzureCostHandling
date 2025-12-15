@@ -268,6 +268,7 @@ class AzureCostProcessor:
                     "_empty1": "",
                     "RG": regel.get("rg", ""),
                     "Aktivitet": regel.get("akt", ""),
+                    "ProjAkt": regel.get("projakt", ""),
                     "ProjKat": regel.get("projkat", ""),
                     "_empty2": "",
                     "Netto": row.get("CostInBillingCurrency", 0),
@@ -293,6 +294,7 @@ class AzureCostProcessor:
                     "_empty1": mapping.get("_empty1", ""),
                     "RG": mapping.get("rg", ""),
                     "Aktivitet": mapping.get("akt", ""),
+                    "ProjAkt": mapping.get("projakt", ""),
                     "ProjKat": mapping.get("projkat", ""),
                     "_empty2": mapping.get("_empty2", ""),
                     "Netto": row.get("CostInBillingCurrency", 0),
@@ -309,6 +311,7 @@ class AzureCostProcessor:
                 "_empty1": upps.get("_empty1", ""),
                 "RG": upps.get("rg", ""),
                 "Aktivitet": upps.get("akt", "999"),
+                "ProjAkt": upps.get("projakt", ""),
                 "ProjKat": upps.get("projkat", "5420"),
                 "_empty2": upps.get("_empty2", ""),
                 "Netto": row.get("CostInBillingCurrency", 0),
@@ -319,7 +322,7 @@ class AzureCostProcessor:
 
         # Definiera kolumnordning med unika tomma kolumner
         kolumner = [
-            "Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjKat", "_empty2", "Netto", "Godkänt av", "KommentarBeskrivning"
+            "Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjAkt", "ProjKat", "_empty2", "Netto", "Godkänt av", "KommentarBeskrivning"
         ]
 
         # Skapa DataFrame även om rows är tom
@@ -338,6 +341,7 @@ class AzureCostProcessor:
                 "_empty1": "first",
                 "RG": "first",
                 "Aktivitet": "first",
+                "ProjAkt": "first",
                 "ProjKat": "first",
                 "_empty2": "first",
                 "Netto": "sum",
@@ -397,11 +401,11 @@ class AzureCostProcessor:
             worksheet_konter.write(0, 0, period_str)
             # Skriv ut konteringstabellen med start på rad 2 (index=1)
             # Skriv rubriker, men tomma för _empty1 och _empty2, och exkludera KommentarBeskrivning
-            headers = ["Kon/Proj", "", "RG", "Aktivitet", "ProjKat", "", "Netto", "Godkänt av"]
+            headers = ["Kon/Proj", "", "RG", "Aktivitet", "ProjAkt", "ProjKat", "", "Netto", "Godkänt av"]
             for col_idx, col in enumerate(headers):
                 worksheet_konter.write(1, col_idx, col)
             # Skriv endast ut dessa kolumner från kontering_df
-            export_cols = ["Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjKat", "_empty2", "Netto", "Godkänt av"]
+            export_cols = ["Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjAkt", "ProjKat", "_empty2", "Netto", "Godkänt av"]
             for row_idx, row in enumerate(kontering_df[export_cols].itertuples(index=False), start=2):
                 for col_idx, value in enumerate(row):
                     worksheet_konter.write(row_idx, col_idx, value)

@@ -9,6 +9,7 @@
 - **konproj**: Projektkod (t.ex. "P.98116002"). Används om konteringen ska läggas mot en projekt.
 - **rg**: Rörelsegren (t.ex. 74000), används om konteringen ska läggas mot en rörelsegren.
 - **akt**: Aktivitetskod (t.ex. "738", "999", "050").
+- **projakt**: Extra projektaktivitetsfält. Mappas till kolumnen `ProjAkt` i Excelfilen. Är normalt tomt, men finns med för att matcha kolumnuppsättningen i Medius.
 - **projkat**: Konto (t.ex. "6540", "5910"). Läggs i fältet ProjKat om kontering sker mot projekt eller i fältet KonProj om kontering sker mot rörelsegren.
 - **beskrivning**: Fri text som beskriver vad raden avser (används som kommentar i Medius).
 
@@ -28,10 +29,10 @@ Varje konteringsrad får sina värden direkt från dessa regler. Ingen taggning 
 ### Exempel på konteringsrader (en projektkontering och en rörelsegrenskontering):
 > **OBS!** De tomma kolumnerna (markerade med |) är avsiktliga och behövs för att Excel-filen ska kunna importeras korrekt i Medius.
 
-| Kon/Proj   | | RG    | Aktivitet | ProjKat | | Netto    | Godkänt av   |
-|------------|-|-------|-----------|---------|-|----------|--------------|
-| P.98116002 | |       | 006       | 6540    | | 9133,89  | John Munthe  |
-| 6540       | | 14000 | 999       |         | | 5764,76  | John Munthe  |
+| Kon/Proj   | | RG    | Aktivitet | ProjAkt | ProjKat | | Netto    | Godkänt av   |
+|------------|-|-------|-----------|---------|---------|-|----------|--------------|
+| P.98116002 | |       | 006       |         | 6540    | | 9133,89  | John Munthe  |
+| 6540       | | 14000 | 999       |         |         | | 5764,76  | John Munthe  |
 
 Se övriga sektioner för exempel på hur du bygger regler och grupperar resurser.
 
@@ -97,6 +98,7 @@ Kontakta systemansvarig om du vill ha hjälp att lägga till nya regler eller om
 - **konproj**
 - **projkat**
 - **akt**
+- **projakt** (för att fylla kolumnen `ProjAkt` vid behov, annars tom)
 
 ### Regler för konteringsrader:
 - **Endast en av rg eller konproj ska vara satt per rad.**
@@ -124,6 +126,7 @@ Kontakta systemansvarig om du vill ha hjälp att lägga till nya regler eller om
 - **Kon/Proj**
 - **RG**
 - **Aktivitet**
+- **ProjAkt** (ny kolumn, oftast tom men obligatorisk för import i Medius)
 - **ProjKat**
 - **Netto** (summerad kostnad för raden, utan tusentalsavgränsare)
 - **Godkänt av** (från konfigurationsfil, default: John Munthe, ev. från inloggad användare)

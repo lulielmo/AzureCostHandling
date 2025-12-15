@@ -3,6 +3,7 @@
     "konproj": "P.201726",
     "rg": "",
     "akt": "999",
+    "projakt": "",
     "projkat": "5420",
     "beskrivning": "Uppsamlingskontering för ej taggade kostnader"
   },
@@ -11,6 +12,7 @@
       "konproj": "9999",
       "rg": "",
       "akt": "",
+      "projakt": "",
       "projkat": "",
       "beskrivning": "Övriga DevOps-kostnader"
     },
@@ -21,6 +23,7 @@
         "konproj": "P.20257601",
         "rg": "",
         "akt": "738",
+        "projakt": "",
         "projkat": "5420",
         "beskrivning": "Bygg- och deploy-pipelines (CI/CD)"
       },
@@ -30,6 +33,7 @@
         "konproj": "",
         "rg": "19003",
         "akt": "738",
+        "projakt": "",
         "projkat": "5420",
         "beskrivning": "Användarlicenser för Devops basicanvändare"
       },
@@ -39,6 +43,7 @@
         "konproj": "P.20219203",
         "rg": "",
         "akt": "738",
+        "projakt": "",
         "projkat": "5420",
         "beskrivning": "Devops Testplaner och testanvändare dynawayprojektet"
       }

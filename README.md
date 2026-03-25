@@ -2,6 +2,12 @@
 
 Ett Python-verktyg för att automatisera hantering av Azure-kostnadsrapporter och konvertering till konteringsformat.
 
+## Bakgrund och syfte
+
+Azurefakturan vi får från Atea innehåller normalt inte tillräcklig detaljinformation om **vilka Azure-tjänster/resurser** som nyttjats eller **vad respektive nyttjande kostat**. Det här verktyget laddar därför ner en detaljerad kostnadsrapport från Azure Cost Management och **analyserar raderna** för att skapa **konteringsrader** som kan klistras in/importeras i vårt fakturahanteringssystem (Medius).
+
+Gruppering och kontering styrs primärt av **konfigurerbara regler i JSON** (resourceId-wildcards), med en särskild hantering för Azure DevOps samt en uppsamlingskontering för rader som ännu saknar matchande regel.
+
 ## Funktioner
 
 - Anslutning till Azure-tenant

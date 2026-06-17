@@ -18,6 +18,13 @@ import json
 import glob
 import re
 
+def format_medius_decimal(value):
+    """Formatera decimaltal med komma som decimaltecken för Medius-import."""
+    if value is None or value == "":
+        return ""
+    text = format(float(value), "f").rstrip("0").rstrip(".") or "0"
+    return text.replace(".", ",")
+
 # Konfigurera loggning
 def setup_logging(verbose=False):
     # Stäng av HTTP-loggning från Azure SDK om inte verbose-läge är aktiverat
@@ -446,8 +453,11 @@ class AzureCostProcessor:
                 worksheet_konter.write(1, col_idx, col)
             # Skriv endast ut dessa kolumner från kontering_df
             export_cols = ["Kon/Proj", "_empty1", "RG", "Aktivitet", "ProjAkt", "EAN", "ProjKat", "_empty2", "Netto", "Godkänt av"]
+            netto_col_idx = export_cols.index("Netto")
             for row_idx, row in enumerate(kontering_df[export_cols].itertuples(index=False), start=2):
                 for col_idx, value in enumerate(row):
+                    if col_idx == netto_col_idx and value != "" and value is not None:
+                        value = format_medius_decimal(value)
                     worksheet_konter.write(row_idx, col_idx, value)
 
             # Flik 2: Pivot (instruktion)

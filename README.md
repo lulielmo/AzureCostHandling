@@ -32,15 +32,13 @@ Detta repository innehåller två huvudsakliga dokument:
 ## Installation
 
 1. Klona detta repository
-2. Skapa en virtuell miljö:
+2. Installera [uv](https://docs.astral.sh/uv/) (t.ex. `winget install astral-sh.uv`)
+3. Synka projektets virtuella miljö och beroenden:
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # På Windows: venv\Scripts\activate
+   uv sync
    ```
-3. Installera beroenden:
-   ```bash
-   pip install -r requirements.txt
-   ```
+
+uv läser Python-versionen från `.python-version` (3.14) och installerar exakta paketversioner från `uv.lock`.
 
 ## Skapa och konfigurera app-registrering (service principal)
 
@@ -104,8 +102,21 @@ AZURE_CLIENT_SECRET=din_client_secret
 
 ## Användning
 
-```python
-python azure_cost_processor.py
+```bash
+uv run python azure_cost_processor.py
+```
+
+## Beroendehantering
+
+```bash
+# Lägg till ett nytt paket
+uv add paketnamn
+
+# Uppgradera alla beroenden
+uv lock --upgrade && uv sync
+
+# Uppgradera ett specifikt paket
+uv lock --upgrade-package pandas && uv sync
 ```
 
 ## Säkerhet

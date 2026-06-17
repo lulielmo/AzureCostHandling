@@ -1,0 +1,14 @@
+[project]
+name = "azurecosthandling"
+version = "0.1.0"
+description = "Automatisera hantering av Azure-kostnadsrapporter och konvertering till konteringsformat"
+requires-python = ">=3.14"
+dependencies = [
+    "azure-identity>=1.12.0",
+    "azure-mgmt-costmanagement>=1.0.0",
+    "azure-mgmt-resource>=23.0.1",
+    "openpyxl>=3.1.2",
+    "pandas>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "xlsxwriter>=3.2.9",
+]

@@ -2,7 +2,6 @@ import logging
 from datetime import datetime, timedelta
 from azure.identity import ClientSecretCredential, DefaultAzureCredential
 from azure.mgmt.costmanagement import CostManagementClient
-from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.costmanagement.models import (
     GenerateDetailedCostReportDefinition,
     GenerateDetailedCostReportTimePeriod,
@@ -51,7 +50,6 @@ class AzureCostProcessor:
             client_secret=config.AZURE_CLIENT_SECRET
         )
         self.cost_client = CostManagementClient(self.credentials)
-        self.resource_client = ResourceManagementClient(self.credentials, config.AZURE_TENANT_ID)
 
     def _get_time_period(self, billing_period=None):
         """

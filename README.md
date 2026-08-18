@@ -13,7 +13,8 @@ Gruppering och kontering styrs primärt av **konfigurerbara regler i JSON** (res
 - Anslutning till Azure-tenant
 - Generering av kostnadsrapporter
 - Automatisk nedladdning av rapporter
-- Konvertering till konteringsformat i Excel
+- Konvertering till konteringsformat i Excel (kontering, pivottabell och rådata)
+- CLI/Dropzone-läge: ny rapport för en given period (`YYYYMM`) och JSON för inklistring i Medius
 - **Central styrning av konteringsregler via kontering_resource_config.json**
 
 ## Viktigt om konteringsregler
@@ -102,9 +103,35 @@ AZURE_CLIENT_SECRET=din_client_secret
 
 ## Användning
 
+Skriptet har två lägen. Working directory ska vara projektroten så att `.env`, konteringsregler och `reports/` hittas.
+
+### Interaktiv meny
+
+Utan argument visas menyn som tidigare (ny Azure-rapport eller befintlig fil i `reports/`):
+
 ```bash
 uv run python azure_cost_processor.py
 ```
+
+Excel-filen skrivs till `reports/` med flikarna Kontering, Pivot och Data. Medius-kommentarer skrivs ut i terminalen.
+
+### Dropzone / CLI
+
+Med ett positionsargument `YYYYMM` hoppas menyn över. Skriptet beställer alltid en **ny** kostnadsrapport för den månaden, konterar den och skriver **ett** UTF-8-JSON-objekt till stdout. Loggar går till stderr och `azure_cost_processor.log`. Excel-filen skapas som vanligt.
+
+```bash
+uv run python azure_cost_processor.py 202606
+```
+
+Dropzone anropar samma sak via projektets `.venv`:
+
+```text
+.venv\Scripts\python.exe "C:\Users\jomu\VS Code\AzureCostHandling\azure_cost_processor.py" "202606"
+```
+
+JSON-kontraktet (`success`, `comment`, `messages`, `rows`) är samma som InvoiceHelper. `rows` följer Medius-kolumnerna A–J (svenskt decimalkomma i `netto`). Summeringsraden `SUMMA` ingår inte. `comment` är texten som ska klistras i Medius; varningar och fel hamnar i `messages`.
+
+Lyckad kontering ger exit code 0. Allvarligt avbrott ger exit code ≠ 0 och JSON med `success: false`. Perioder mer än 11 månader bakåt i tiden ger en varning i `messages` men körningen avbryts inte (till skillnad från den interaktiva bekräftelsen).
 
 ## Beroendehantering
 

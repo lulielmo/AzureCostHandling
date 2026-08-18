@@ -12,6 +12,7 @@ import config
 import time
 import requests
 import os
+import sys
 import argparse
 import json
 import glob
@@ -25,18 +26,21 @@ def format_medius_decimal(value):
     return text.replace(".", ",")
 
 # Konfigurera loggning
-def setup_logging(verbose=False):
+def setup_logging(verbose=False, to_stderr=False):
     # Stäng av HTTP-loggning från Azure SDK om inte verbose-läge är aktiverat
     if not verbose:
         logging.getLogger('azure.core.pipeline.policies.http_logging_policy').setLevel(logging.WARNING)
         logging.getLogger('azure.identity').setLevel(logging.WARNING)
-    
+
+    # CLI/Dropzone: stdout måste vara rent JSON. StreamHandler() utan stream är
+    # sys.stderr i Python, men sätts explicit här så loggar inte kan råka blandas in.
+    stream = sys.stderr if to_stderr else None
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler('azure_cost_processor.log'),
-            logging.StreamHandler()
+            logging.StreamHandler(stream)
         ]
     )
     return logging.getLogger(__name__)
@@ -404,7 +408,7 @@ class AzureCostProcessor:
         kontering_df = pd.concat([kontering_df, pd.DataFrame([sumrad])], ignore_index=True)
         return kontering_df, warnings
 
-    def export_to_excel(self, df, filename=None):
+    def export_to_excel(self, df, filename=None, print_comments=True):
         """
         Exporterar data till en Excel-fil med tre flikar:
         - Kontering (med periodinfo överst och konteringstabell)
@@ -509,14 +513,23 @@ class AzureCostProcessor:
 
         self.logger.info(f"Excel-fil skapad: {filename}")
 
-        # Efter att kontering_df och warnings skapats i export_to_excel:
-        # ...
-        # Generera kommentarer för inklistring i Medius
-        print("\nKommentarer för inklistring i Medius:")
-        # Hämta periodinfo
         period = period_str.replace("Denna rapport gäller perioden: ", "")
-        # Skriv ut kommentarerna numrerat direkt från kontering_df (utom summeringsraden)
-        for idx, row in enumerate(kontering_df.iloc[:-1].itertuples(index=False), 1):
+        comment_lines = self.build_medius_comment_lines(kontering_df, df, kontering_config, period)
+        if print_comments:
+            print("\nKommentarer för inklistring i Medius:")
+            for idx, kommentar in enumerate(comment_lines, 1):
+                print(f"{idx}. {kommentar}")
+
+        return {
+            "kontering_df": kontering_df,
+            "warnings": warnings,
+            "comment_lines": comment_lines,
+        }
+
+    def build_medius_comment_lines(self, kontering_df, df, kontering_config, period):
+        """Bygger Medius-kommentarer (utan numrering) för varje konteringsrad utom SUMMA."""
+        lines = []
+        for row in kontering_df.iloc[:-1].itertuples(index=False):
             kommentar = getattr(row, "KommentarBeskrivning", "")
             # Om kommentaren är "Ingen beskrivning angiven", försök hitta unika BillingDescriptionTag i matchande rader
             if kommentar == "Ingen beskrivning angiven":
@@ -526,14 +539,12 @@ class AzureCostProcessor:
                 projkat = row_dict.get("ProjKat")
                 godkant_av = row_dict.get("Godkänt av")
                 rg = row_dict.get("RG")
-                # Hitta matchande rader i df för denna konteringsrad
                 if str(kon_proj).startswith("P."):
                     group = (kon_proj, aktivitet, projkat, godkant_av)
                 elif rg:
                     group = (rg, aktivitet, kon_proj, godkant_av)
                 else:
                     group = (rg, aktivitet, projkat, godkant_av)
-                # Hämta matchande rader ur df (ursprungsdata)
                 match_rows = df.copy()
                 match_rows["_group"] = match_rows.apply(lambda r: (f"P.{r['BillingProjTag']}" if str(r.get("BillingProjTag", "")).startswith("P.") or str(r.get("BillingProjTag", "")).isdigit() else r.get("BillingRGTag", ""), r.get("BillingAktTag", ""), r.get("BillingKatTag", ""), kontering_config.get("godkant_av", "John Munthe")), axis=1)
                 match_rows = match_rows[match_rows["_group"] == group]
@@ -544,13 +555,13 @@ class AzureCostProcessor:
                 elif len(descs) > 1:
                     kommentar = f"Flera beskrivningar: {', '.join(descs)}"
                 else:
-                    kommentar = f"Ingen beskrivning angiven"
-            # Lägg bara till perioden om den inte redan finns i kommentaren
+                    kommentar = "Ingen beskrivning angiven"
             if "period:" not in kommentar:
                 kommentar = f"{kommentar}, period: {period}"
-            print(f"{idx}. {kommentar}")
+            lines.append(kommentar)
+        return lines
 
-    def process_cost_data(self, report_url=None, local_file_path=None):
+    def process_cost_data(self, report_url=None, local_file_path=None, print_comments=True):
         """
         Bearbetar kostnadsdata från den detaljerade rapporten.
         Args:
@@ -634,91 +645,239 @@ class AzureCostProcessor:
                 self.logger.warning("Kolumnen 'Tags' saknas i rapporten!")
 
             # Efter bearbetning: exportera till Excel
-            self.export_to_excel(df)
-
-            # Här kommer vi senare att lägga till kod för att bearbeta datan
-            # För nu returnerar vi bara DataFrame
-            return df
+            result = self.export_to_excel(df, print_comments=print_comments)
+            result["df"] = df
+            return result
         
         except Exception as e:
             self.logger.error(f"Fel vid bearbetning av kostnadsdata: {str(e)}")
             raise
 
-def main():
+def _dropzone_cell(value):
+    """Konverterar ett konteringsfält till sträng för Dropzone-JSON."""
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    if text.lower() in ("nan", "none"):
+        return ""
+    return text
+
+
+def _dropzone_netto(value):
+    """Formaterar Netto som svensk decimalsträng, samma som Excel-exporten."""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    return format_medius_decimal(value)
+
+
+def kontering_df_to_dropzone(kontering_df):
+    """Mappar konteringsrader (utan SUMMA) till Dropzone-kontraktets Medius-kolumner (A–J)."""
+    data_rows = kontering_df[kontering_df["Kon/Proj"] != "SUMMA"]
+    rows = []
+    for rec in data_rows.to_dict("records"):
+        rows.append({
+            "konProj": _dropzone_cell(rec.get("Kon/Proj")),
+            "empty1": "",
+            "rg": _dropzone_cell(rec.get("RG")),
+            "aktivitet": _dropzone_cell(rec.get("Aktivitet")),
+            "projAkt": _dropzone_cell(rec.get("ProjAkt")),
+            "ean": _dropzone_cell(rec.get("EAN")),
+            "projKat": _dropzone_cell(rec.get("ProjKat")),
+            "empty2": "",
+            "netto": _dropzone_netto(rec.get("Netto")),
+            "godkantAv": _dropzone_cell(rec.get("Godkänt av")),
+        })
+    return rows
+
+
+def _write_stdout_json(payload):
+    """Skriver exakt ett JSON-objekt till stdout (UTF-8)."""
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def emit_dropzone_json(comment, kontering_df, messages=None):
+    _write_stdout_json({
+        "success": True,
+        "comment": comment or "",
+        "messages": messages if messages is not None else [],
+        "rows": kontering_df_to_dropzone(kontering_df),
+    })
+
+
+def emit_dropzone_failure(text, extra_messages=None):
+    messages = [{"level": "error", "text": text}]
+    if extra_messages:
+        messages.extend(extra_messages)
+    _write_stdout_json({
+        "success": False,
+        "comment": "",
+        "messages": messages,
+        "rows": [],
+    })
+
+
+def _parse_billing_period(period):
+    """Validerar YYYYMM och returnerar datetime, annars ValueError."""
+    period = (period or "").strip()
+    if not re.fullmatch(r"\d{6}", period):
+        raise ValueError(f"Felaktigt format på period: {period}. Ange som 'YYYYMM'.")
+    return datetime.strptime(period, "%Y%m")
+
+
+def run_dropzone(logger, billing_period):
+    """Körning anropad från Dropzone: ny Azure-rapport för YYYYMM, JSON på stdout."""
+    messages = []
     try:
-        # Lägg till argumenthantering
-        parser = argparse.ArgumentParser(description='Azure Cost Processor')
-        parser.add_argument('-v', '--verbose', action='store_true', help='Aktivera detaljerad loggning')
-        args = parser.parse_args()
-        
-        # Konfigurera loggning baserat på verbose-flaggan
-        logger = setup_logging(args.verbose)
-        
+        period_date = _parse_billing_period(billing_period)
+    except Exception:
+        text = f"Felaktigt format på period: {billing_period}. Ange som 'YYYYMM'."
+        logger.error(text)
+        emit_dropzone_failure(text)
+        return 1
+
+    today = datetime.today()
+    if (today.year - period_date.year) * 12 + (today.month - period_date.month) > 11:
+        messages.append({
+            "level": "warning",
+            "text": (
+                f"Perioden {period_date.strftime('%Y-%m')} är mer än 11 månader bakåt i tiden. "
+                "Azure Cost Management kan sakna detaljerad rapportdata."
+            ),
+        })
+
+    try:
         processor = AzureCostProcessor(logger)
         logger.info("Azure Cost Processor startad")
-        
-        # Fråga användaren om de vill generera en ny rapport eller bearbeta en befintlig
-        print("\nVälj alternativ:")
-        print("1. Generera ny kostnadsrapport från Azure")
-        print("2. Bearbeta befintlig rapportfil")
-        choice = input("Ange ditt val (1 eller 2): ").strip()
-        
-        if choice == "1":
-            # Fråga om användaren vill ange en period
-            period = input("Ange rapportperiod (YYYYMM) eller lämna tomt för standard: ").strip()
-            if period:
-                try:
-                    period_date = datetime.strptime(period, "%Y%m")
-                    today = datetime.today()
-                    # Om perioden är mer än 11 månader bakåt i tiden
-                    if (today.year - period_date.year) * 12 + (today.month - period_date.month) > 11:
-                        confirm = input(f"Du har valt perioden {period_date.strftime('%Y-%m')}, vilket är mer än 11 månader bakåt i tiden. Är du säker på att du vill fortsätta? (j/n): ").strip().lower()
-                        if confirm != 'j':
-                            print("Avbryter på begäran av användaren.")
-                            return
-                except Exception:
-                    print("Felaktigt format på period. Ange som 'YYYYMM'.")
-                    return
-            if not config.AZURE_BILLING_ACCOUNT_ID:
-                raise ValueError("AZURE_BILLING_ACCOUNT_ID måste anges i .env-filen")
-            report_url = processor.generate_detailed_cost_report_billing_account(config.AZURE_BILLING_ACCOUNT_ID, period if period else None)
-            if report_url:
-                processed_data = processor.process_cost_data(report_url)
-                logger.info("Kostnadsdata bearbetad framgångsrikt")
-        
-        elif choice == "2":
-            # Bearbeta befintlig fil
-            print("\nTillgängliga rapporter i 'reports'-mappen:")
-            reports_dir = "reports"
-            if os.path.exists(reports_dir):
-                files = [f for f in os.listdir(reports_dir) if f.endswith('.csv.gz')]
-                if not files:
-                    print("Inga rapporter hittades i 'reports'-mappen.")
-                    return
-                
-                for i, file in enumerate(files, 1):
-                    print(f"{i}. {file}")
-                
-                file_choice = input("\nVälj rapport att bearbeta (ange nummer): ").strip()
-                try:
-                    selected_file = files[int(file_choice) - 1]
-                    file_path = os.path.join(reports_dir, selected_file)
-                    logger.info(f"Bearbetar befintlig rapport: {selected_file}")
-                    processed_data = processor.process_cost_data(None, file_path)
-                    logger.info("Kostnadsdata bearbetad framgångsrikt")
-                except (ValueError, IndexError):
-                    print("Ogiltigt val. Avslutar.")
-                    return
-            else:
-                print("'reports'-mappen hittades inte.")
-                return
-        else:
-            print("Ogiltigt val. Avslutar.")
-            return
-        
+
+        if not config.AZURE_BILLING_ACCOUNT_ID:
+            raise ValueError("AZURE_BILLING_ACCOUNT_ID måste anges i .env-filen")
+
+        report_url = processor.generate_detailed_cost_report_billing_account(
+            config.AZURE_BILLING_ACCOUNT_ID, billing_period
+        )
+        if not report_url:
+            raise RuntimeError("Kunde inte generera kostnadsrapport (ingen download-URL).")
+
+        result = processor.process_cost_data(report_url, print_comments=False)
+        logger.info("Kostnadsdata bearbetad framgångsrikt")
+
+        for warning in result.get("warnings") or []:
+            messages.append({"level": "warning", "text": warning})
+
+        comment_lines = result.get("comment_lines") or []
+        comment = "\n".join(f"{idx}. {line}" for idx, line in enumerate(comment_lines, 1))
+        emit_dropzone_json(comment, result["kontering_df"], messages)
+        return 0
     except Exception as e:
         logger.error(f"Ett fel uppstod: {str(e)}")
+        emit_dropzone_failure(str(e), extra_messages=messages)
+        return 1
+
+
+def run_interactive(processor, logger):
+    """Manuell körning med meny (oförändrat beteende)."""
+    print("\nVälj alternativ:")
+    print("1. Generera ny kostnadsrapport från Azure")
+    print("2. Bearbeta befintlig rapportfil")
+    choice = input("Ange ditt val (1 eller 2): ").strip()
+
+    if choice == "1":
+        period = input("Ange rapportperiod (YYYYMM) eller lämna tomt för standard: ").strip()
+        if period:
+            try:
+                period_date = datetime.strptime(period, "%Y%m")
+                today = datetime.today()
+                if (today.year - period_date.year) * 12 + (today.month - period_date.month) > 11:
+                    confirm = input(
+                        f"Du har valt perioden {period_date.strftime('%Y-%m')}, "
+                        "vilket är mer än 11 månader bakåt i tiden. Är du säker på att du vill fortsätta? (j/n): "
+                    ).strip().lower()
+                    if confirm != "j":
+                        print("Avbryter på begäran av användaren.")
+                        return
+            except Exception:
+                print("Felaktigt format på period. Ange som 'YYYYMM'.")
+                return
+        if not config.AZURE_BILLING_ACCOUNT_ID:
+            raise ValueError("AZURE_BILLING_ACCOUNT_ID måste anges i .env-filen")
+        report_url = processor.generate_detailed_cost_report_billing_account(
+            config.AZURE_BILLING_ACCOUNT_ID, period if period else None
+        )
+        if report_url:
+            processor.process_cost_data(report_url)
+            logger.info("Kostnadsdata bearbetad framgångsrikt")
+
+    elif choice == "2":
+        print("\nTillgängliga rapporter i 'reports'-mappen:")
+        reports_dir = "reports"
+        if os.path.exists(reports_dir):
+            files = [f for f in os.listdir(reports_dir) if f.endswith(".csv.gz")]
+            if not files:
+                print("Inga rapporter hittades i 'reports'-mappen.")
+                return
+
+            for i, file in enumerate(files, 1):
+                print(f"{i}. {file}")
+
+            file_choice = input("\nVälj rapport att bearbeta (ange nummer): ").strip()
+            try:
+                selected_file = files[int(file_choice) - 1]
+                file_path = os.path.join(reports_dir, selected_file)
+                logger.info(f"Bearbetar befintlig rapport: {selected_file}")
+                processor.process_cost_data(None, file_path)
+                logger.info("Kostnadsdata bearbetad framgångsrikt")
+            except (ValueError, IndexError):
+                print("Ogiltigt val. Avslutar.")
+                return
+        else:
+            print("'reports'-mappen hittades inte.")
+            return
+    else:
+        print("Ogiltigt val. Avslutar.")
+        return
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Azure Cost Processor")
+    parser.add_argument(
+        "period",
+        nargs="?",
+        help="Faktureringsperiod YYYYMM (Dropzone/CLI). Utan argument: interaktiv meny.",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Aktivera detaljerad loggning")
+    args = parser.parse_args()
+
+    billing_period = (args.period or "").strip()
+    cli_mode = bool(billing_period)
+    logger = setup_logging(args.verbose, to_stderr=cli_mode)
+
+    try:
+        if cli_mode:
+            sys.exit(run_dropzone(logger, billing_period))
+
+        processor = AzureCostProcessor(logger)
+        logger.info("Azure Cost Processor startad")
+        run_interactive(processor, logger)
+    except Exception as e:
+        logger.error(f"Ett fel uppstod: {str(e)}")
+        if cli_mode:
+            emit_dropzone_failure(str(e))
+            sys.exit(1)
         raise
 
+
 if __name__ == "__main__":
-    main() 
+    main()
+ 

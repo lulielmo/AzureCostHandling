@@ -39,7 +39,7 @@ def setup_logging(verbose=False, to_stderr=False):
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler('azure_cost_processor.log'),
+            logging.FileHandler('azure_cost_processor.log', encoding='utf-8'),
             logging.StreamHandler(stream)
         ]
     )
